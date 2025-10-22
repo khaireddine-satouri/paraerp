@@ -480,7 +480,7 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
             </div>
 
             <p className="text-sm text-gray-700">
-              Vous êtes sur le point de supprimer la <b>séance réalisée #{seance.numero_seance}</b>.
+              Vous êtes sur le point de supprimer la <b>séance réalisée numéro {seance.numero_seance}</b>.
               Cette action <b>réindexera automatiquement</b> les numéros des séances suivantes
               (programmées et réalisées) du même dossier.
             </p>
