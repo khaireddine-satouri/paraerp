@@ -1,3 +1,4 @@
+// src/lib/supabase.ts
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -7,78 +8,72 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables. Please check your .env file.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-export interface Client {
+/** ------- Debug bus simple en mémoire (lu par l’overlay) ------- */
+type NetLog = {
   id: string;
-  nom: string;
-  statut: 'actif' | 'inactif';
-  created_at: string;
-  updated_at: string;
-}
+  ts: number;
+  method: string;
+  url: string;
+  status?: number;
+  ok?: boolean;
+  durationMs?: number;
+  error?: string;
+};
+export const __netLogs: NetLog[] = [];
+const pushLog = (l: NetLog) => {
+  __netLogs.unshift(l);
+  if (__netLogs.length > 200) __netLogs.pop();
+  // Optionnel: aussi log console
+  // eslint-disable-next-line no-console
+  console.debug('[NET]', l.method, l.url, l.status ?? '-', l.durationMs ? `${l.durationMs}ms` : '', l.error ?? '');
+};
 
-export interface UserBase {
-  id: string;
-  nom: string;
-  prenom: string;
-  type_utilisateur: 'admin' | 'assistant';
-  client_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
+/** ------- fetch avec timeout + logs ------- */
+const DEBUG_TIMEOUT_MS = 15000;
 
-export interface Patient {
-  id: string;
-  nom: string;
-  prenom: string;
-  telephone: string;
-  photo_url: string | null;     // URL publique (pour l’affichage)
-  photo_path?: string | null;   // ✅ chemin storage (ex: "patientId/xxx.jpg")
-  client_id: string | null;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string;
-}
+const debugFetch: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : (input as URL).toString();
+  const method = (init?.method || 'GET').toUpperCase();
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const started = performance.now();
 
-export interface DossierSoin {
-  id: string;
-  patient_id: string;
-  motif: string;
-  commentaire: string;
-  nombre_seances: number;
-  pec_cnam: boolean;
-  etat_pec: 'en_cours' | 'depose' | null;
-  prix_par_seance: number;
-  date_debut: string | null;
-  date_fin: string | null;
-  etat: 'a_venir' | 'en_cours' | 'termine';
-  est_actif?: boolean | null;   // ✅ lu depuis la DB (trigger)
-  client_id: string | null;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string;
-  updated_by: string | null;
-}
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort('Timeout'), DEBUG_TIMEOUT_MS);
 
-export interface Seance {
-  id: string;
-  dossier_id: string;
-  numero_seance: number;
-  date_seance: string;
-  prestataire_id: string;
-  montant_paye: number;
-  note: string | null;
-  created_at: string;
-}
+  // Fusionner les signaux si on nous en donne un
+  const signal = init?.signal
+    ? ((): AbortSignal => {
+        const ctrl = new AbortController();
+        const onAbort = () => ctrl.abort();
+        init!.signal!.addEventListener('abort', onAbort);
+        // quand notre fetch finit on détache (voir finally)
+        return ctrl.signal;
+      })()
+    : ac.signal;
 
-export interface Document {
-  id: string;
-  dossier_id: string;
-  nom: string;
-  type_fichier: 'photo' | 'pdf';
-  storage_path: string;         // ex: "dossierId/filename.pdf"
-  uploaded_by: string | null;
-  created_at: string;
-}
+  try {
+    const res = await fetch(input, { ...init, signal });
+    const duration = Math.round(performance.now() - started);
+    pushLog({ id, ts: Date.now(), method, url, status: res.status, ok: res.ok, durationMs: duration });
+    return res;
+  } catch (e: any) {
+    const duration = Math.round(performance.now() - started);
+    pushLog({
+      id,
+      ts: Date.now(),
+      method,
+      url,
+      status: undefined,
+      ok: false,
+      durationMs: duration,
+      error: e?.message || String(e),
+    });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
-
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: { fetch: debugFetch }, // ✅ on force Supabase à utiliser notre fetch
+});
