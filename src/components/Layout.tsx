@@ -1,5 +1,4 @@
-// src/components/Layout.tsx
-import React, { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Send, Inbox, Bell } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { LogOut, Users, FileText, Calendar, Settings, BarChart3, CalendarRange } from 'lucide-react';
@@ -19,14 +18,19 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
   const isAdmin = userBase?.type_utilisateur === 'admin';
   const clientId = userBase?.client_id ?? null;
 
+  // true  -> il existe au moins un assistant pour ce client
+  // false -> aucun assistant trouvé
+  // null  -> inconnu (chargement)
   const [hasAssistants, setHasAssistants] = useState<boolean | null>(null);
 
-  const { count: newTicketsCount, markAsSeen } = useNewTicketsIndicator(clientId, isAdmin);
+  // --- Compteur de nouveaux tickets pour l'admin (du jour) ---
+  const { count: newTicketsCount, markAsSeen, refresh } = useNewTicketsIndicator(clientId, isAdmin);
   const showTicketsUI = isAdmin && hasAssistants === true;
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+
+    const checkAssistants = async () => {
       if (!isAdmin || !clientId) {
         setHasAssistants(null);
         return;
@@ -38,6 +42,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
           .eq('client_id', clientId)
           .eq('type_utilisateur', 'assistant')
           .limit(1);
+
         if (cancelled) return;
         if (error) {
           console.error('Erreur vérification assistants:', error);
@@ -51,44 +56,45 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
           setHasAssistants(false);
         }
       }
-    })();
-    return () => { cancelled = true; };
+    };
+
+    checkAssistants();
+    return () => {
+      cancelled = true;
+    };
   }, [isAdmin, clientId]);
 
+  // Si l’admin n’a pas d’assistants et qu’on est sur l’onglet “tickets_admin”, on renvoie vers Analyse
   useEffect(() => {
     if (isAdmin && hasAssistants === false && currentView === 'tickets_admin') {
       onNavigate('analyse');
     }
   }, [isAdmin, hasAssistants, currentView, onNavigate]);
 
+  // Quand on arrive déjà sur la page tickets_admin, purge le badge
   useEffect(() => {
     if (showTicketsUI && currentView === 'tickets_admin') {
       markAsSeen();
     }
   }, [showTicketsUI, currentView, markAsSeen]);
 
-  const handleSignOut = async (e?: React.MouseEvent) => {
-    e?.preventDefault();
-    e?.stopPropagation();
+  const handleSignOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
     try {
-      // ✅ Attendre la fin de la déconnexion (Supabase vide la session)
       await signOut();
-      // ✅ NE PAS recharger : laisser l’AuthContext remonter l’écran de login
-      // (si besoin de rediriger, fais-le ici vers la route "login" de ton router)
-      // ex: navigate('/login')
-    } catch (err) {
-      console.error('Erreur déconnexion:', err);
+      if (typeof window !== 'undefined') window.location.reload();
+    } catch (e) {
+      console.error('Erreur déconnexion:', e);
+      if (typeof window !== 'undefined') window.location.reload();
     } finally {
       setSigningOut(false);
     }
   };
 
-  const goTicketsAdmin = async (e?: React.MouseEvent) => {
-    e?.preventDefault();
-    e?.stopPropagation();
+  const goTicketsAdmin = async () => {
     if (!showTicketsUI) return;
+    // on purge le compteur puis on navigue
     await markAsSeen();
     onNavigate('tickets_admin');
   };
@@ -96,7 +102,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-[100] pointer-events-auto">
+      <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <h1 className="text-xl font-bold text-teal-600">Cabinet Ayadi Radhouan</h1>
@@ -108,10 +114,10 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                   type="button"
                   onClick={goTicketsAdmin}
                   aria-label="Tickets collaborateurs"
-                  className="relative p-3 sm:p-3 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition active:opacity-80 touch-manipulation select-none"
+                  className="relative p-3 sm:p-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition active:scale-[0.98] touch-manipulation"
                   title="Tickets collaborateurs"
                 >
-                  <Bell className="w-6 h-6 sm:w-5 sm:h-5 pointer-events-none" />
+                  <Bell className="w-6 h-6 sm:w-5 sm:h-5" />
                   {newTicketsCount > 0 && (
                     <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] flex items-center justify-center">
                       {newTicketsCount > 99 ? '99+' : newTicketsCount}
@@ -133,13 +139,10 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                 type="button"
                 onClick={handleSignOut}
                 aria-label="Déconnexion"
-                disabled={signingOut}
-                className={`p-3 sm:p-3 rounded-lg transition touch-manipulation select-none ${
-                  signingOut ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:opacity-80'
-                }`}
+                className="p-3 sm:p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition active:scale-[0.98] touch-manipulation"
                 title="Déconnexion"
               >
-                <LogOut className="w-6 h-6 sm:w-5 sm:h-5 pointer-events-none" />
+                <LogOut className="w-6 h-6 sm:w-5 sm:h-5" />
               </button>
             </div>
           </div>
@@ -162,7 +165,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                 }`}
                 title="Indicateurs & statistiques"
               >
-                <BarChart3 className="w-4 h-4 pointer-events-none" />
+                <BarChart3 className="w-4 h-4" />
                 Analyse
               </button>
             )}
@@ -178,7 +181,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <FileText className="w-4 h-4 pointer-events-none" />
+                <FileText className="w-4 h-4" />
                 Tableau de bord
               </button>
             )}
@@ -193,7 +196,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
             >
-              <Users className="w-4 h-4 pointer-events-none" />
+              <Users className="w-4 h-4" />
               Patients
             </button>
 
@@ -207,7 +210,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
             >
-              <Calendar className="w-4 h-4 pointer-events-none" />
+              <Calendar className="w-4 h-4" />
               Séances du jour
             </button>
 
@@ -222,7 +225,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
               }`}
               title="Agenda par heure"
             >
-              <CalendarRange className="w-4 h-4 pointer-events-none" />
+              <CalendarRange className="w-4 h-4" />
               Planning
             </button>
 
@@ -237,12 +240,12 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <Send className="w-4 h-4 pointer-events-none" />
+                <Send className="w-4 h-4" />
                 Envoyer un ticket
               </button>
             )}
 
-            {/* Tickets collaborateurs (admin) */}
+            {/* Tickets collaborateurs (admin) — visible uniquement s’il y a des assistants) */}
             {showTicketsUI && (
               <button
                 type="button"
@@ -253,8 +256,10 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <Inbox className="w-4 h-4 pointer-events-none" />
+                <Inbox className="w-4 h-4" />
                 <span>Tickets staff</span>
+
+                {/* Badge mini dans l’onglet */}
                 {newTicketsCount > 0 && (
                   <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px]">
                     {newTicketsCount > 99 ? '99+' : newTicketsCount}
@@ -274,7 +279,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <Settings className="w-4 h-4 pointer-events-none" />
+                <Settings className="w-4 h-4" />
                 Paramètres
               </button>
             )}
