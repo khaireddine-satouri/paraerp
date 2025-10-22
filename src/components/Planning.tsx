@@ -713,48 +713,53 @@ export default function Planning({
             </div>
 
             {/* Export — groupe compact (affiché uniquement pour programmées) */}
-            {etatFilter === "programmée" && (
-              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="date"
-                    min={todayStr}
-                    value={pdfFrom}
-                    onChange={(e) => setPdfFrom(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg"
-                    title="De"
-                  />
-                  <span className="text-gray-500">→</span>
-                  <input
-                    type="date"
-                    min={todayStr}
-                    value={pdfTo}
-                    onChange={(e) => setPdfTo(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg"
-                    title="À"
-                  />
-                </div>
+            {/* Export — groupe compact (affiché uniquement pour programmées) */}
+{etatFilter === "programmée" && (
+  <div className="flex flex-col gap-2 sm:gap-3">
+    {/* Ligne dates : empilée en mobile, en ligne sur ≥ sm */}
+    <div className="w-full space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
+      <input
+        type="date"
+        min={todayStr}
+        value={pdfFrom}
+        onChange={(e) => setPdfFrom(e.target.value)}
+        className="w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
+        title="De"
+      />
+      <span className="hidden sm:inline text-gray-500">→</span>
+      <input
+        type="date"
+        min={todayStr}
+        value={pdfTo}
+        onChange={(e) => setPdfTo(e.target.value)}
+        className="w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
+        title="À"
+      />
+    </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleExport("pdf")}
-                    className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
-                    title="Exporter PDF (1 page par jour)"
-                  >
-                    <Download className="w-4 h-4" />
-                    PDF
-                  </button>
+    {/* Ligne boutons : toujours propre en mobile */}
+    <div className="flex items-center gap-2">
+      <button
+        onClick={() => handleExport("pdf")}
+        className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
+        title="Exporter PDF (1 page par jour)"
+      >
+        <Download className="w-4 h-4" />
+        PDF
+      </button>
 
-                  <button
-                    onClick={() => handleExport("excel")}
-                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
-                    title="Exporter Excel (1 onglet par jour)"
-                  >
-                    <Download className="w-4 h-4" />
-                    Excel
-                  </button>
-                </div>
-              </div>
+      <button
+        onClick={() => handleExport("excel")}
+        className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+        title="Exporter Excel (1 onglet par jour)"
+      >
+        <Download className="w-4 h-4" />
+        Excel
+      </button>
+    </div>
+  </div>
+)}
+
             )}
           </div>
         </div>
