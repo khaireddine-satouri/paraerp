@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   SquarePen,
   Download,
+  Filter,
 } from "lucide-react";
 
 import EditSeanceModal from "./EditSeanceModal";
@@ -60,17 +61,6 @@ function extractMinute(heure: any): number {
 function isProgrammeeState(etat?: string | null) {
   return etat === "programmée" || etat === "programmee";
 }
-function isFutureDateTime(dateISO: string, hh: number, mm: number) {
-  const now = new Date();
-  const today = toDateStr(now);
-  const nowH = now.getHours();
-  const nowM = now.getMinutes();
-  if (dateISO > today) return true;
-  if (dateISO < today) return false;
-  if (hh > nowH) return true;
-  if (hh < nowH) return false;
-  return mm > nowM;
-}
 function nowInTZ(tz: string) {
   const parts = new Intl.DateTimeFormat("fr-TN", {
     year: "numeric",
@@ -92,6 +82,15 @@ function nowInTZ(tz: string) {
     hour: Number(hh || "0"),
     minute: Number(mi || "0"),
   };
+}
+// ➜ version “heure de Tunis”
+function isFutureDateTimeInTZ(dateISO: string, hh: number, mm: number, tz = "Africa/Tunis") {
+  const { dateStr, hour, minute } = nowInTZ(tz);
+  if (dateISO > dateStr) return true;
+  if (dateISO < dateStr) return false;
+  if (hh > hour) return true;
+  if (hh < hour) return false;
+  return mm > minute;
 }
 
 /* ------------------ Utils quota ------------------ */
@@ -172,19 +171,21 @@ export default function Planning({
   // Vue & filtres
   type ViewMode = "day" | "week" | "month";
   const [mode, setMode] = useState<ViewMode>("week");
-  const [etatFilter, setEtatFilter] = useState<"programmée" | "réalisée">(
-    "programmée"
-  );
+  const [etatFilter, setEtatFilter] = useState<"programmée" | "réalisée">("programmée");
 
-  // Plage d’affichage (slot) : 60 min (défaut) ou 30 min
+  // Filtre prestataire (admin)
+  const [prestataires, setPrestataires] = useState<UserBase[]>([]);
+  const [prestataireFilter, setPrestataireFilter] = useState<string>("all"); // "all" | userId
+
+  // Plage d’affichage (slot)
   const [slotMinutes, setSlotMinutes] = useState<30 | 60>(60);
 
   const todayStr = useMemo(() => toDateStr(new Date()), []);
-  const [anchorDate, setAnchorDate] = useState<string>(todayStr); // centre de la vue (jour/sem/mois)
+  const [anchorDate, setAnchorDate] = useState<string>(todayStr);
 
   // Sélecteurs Mois/Année (vue mois)
   const anchor = useMemo(() => new Date(anchorDate), [anchorDate]);
-  const [monthSelect, setMonthSelect] = useState<number>(anchor.getMonth()); // 0..11
+  const [monthSelect, setMonthSelect] = useState<number>(anchor.getMonth());
   const [yearSelect, setYearSelect] = useState<number>(anchor.getFullYear());
 
   useEffect(() => {
@@ -197,6 +198,19 @@ export default function Planning({
     const y = new Date().getFullYear();
     return Array.from({ length: 9 }, (_, i) => y - 4 + i);
   }, []);
+
+  // Charger prestataires (admin)
+  useEffect(() => {
+    (async () => {
+      if (!isAdmin || !userBase?.client_id) return;
+      const { data } = await supabase
+        .from("users_base")
+        .select("id, nom, prenom")
+        .eq("client_id", userBase.client_id)
+        .order("nom");
+      setPrestataires((data || []) as UserBase[]);
+    })();
+  }, [isAdmin, userBase?.client_id]);
 
   // Période affichée
   const startEnd = useMemo(() => {
@@ -213,13 +227,12 @@ export default function Planning({
       const end = toDateStr(addDays(monday, 7));
       return { start, end };
     }
-    // month
     const first = new Date(d.getFullYear(), d.getMonth(), 1);
     const nextMonth = new Date(d.getFullYear(), d.getMonth() + 1, 1);
     return { start: toDateStr(first), end: toDateStr(nextMonth) };
   }, [anchorDate, mode]);
 
-  // Création des slots (8:00 → 21:00 exclusive)
+  // Slots (8:00 → 21:00 exclusive)
   type Slot = { hour: number; minute: number };
   const slots: Slot[] = useMemo(() => {
     const res: Slot[] = [];
@@ -244,10 +257,8 @@ export default function Planning({
   >([]);
   const [loading, setLoading] = useState(true);
 
-  // Slot sélectionné (pour la liste & actions)
-  const [slot, setSlot] = useState<{ date: string; hour: number; minute: number } | null>(
-    null
-  );
+  // Slot sélectionné
+  const [slot, setSlot] = useState<{ date: string; hour: number; minute: number } | null>(null);
 
   // Modales internes
   const [showProgramHere, setShowProgramHere] = useState(false);
@@ -255,23 +266,17 @@ export default function Planning({
 
   // Modales d’édition
   const [editScheduled, setEditScheduled] =
-    useState<Seance & { dossier?: DossierSoin; patient?: Patient } | null>(
-      null
-    );
+    useState<Seance & { dossier?: DossierSoin; patient?: Patient } | null>(null);
   const [editRealized, setEditRealized] =
-    useState<Seance & { dossier?: DossierSoin; patient?: Patient } | null>(
-      null
-    );
+    useState<Seance & { dossier?: DossierSoin; patient?: Patient } | null>(null);
   const [realizeFromScheduled, setRealizeFromScheduled] =
-    useState<Seance & { dossier?: DossierSoin; patient?: Patient } | null>(
-      null
-    );
+    useState<Seance & { dossier?: DossierSoin; patient?: Patient } | null>(null);
 
-  // Export (programmées) — plage
+  // Export (programmées)
   const [pdfFrom, setPdfFrom] = useState<string>(todayStr);
   const [pdfTo, setPdfTo] = useState<string>(todayStr);
 
-  // Refresh centralisé + RealTime
+  // Refresh + Realtime
   const [reloadNonce, setReloadNonce] = useState(0);
   const refresh = () => setReloadNonce((n) => n + 1);
 
@@ -296,7 +301,11 @@ export default function Planning({
           .order("date_seance", { ascending: true })
           .order("heure_seance", { ascending: true });
 
-        if (!isAdmin) q = q.eq("prestataire_id", user?.id);
+        if (!isAdmin) {
+          q = q.eq("prestataire_id", user?.id);
+        } else if (prestataireFilter !== "all") {
+          q = q.eq("prestataire_id", prestataireFilter);
+        }
 
         const { data: seancesRaw, error: seErr } = await q;
         if (seErr) throw seErr;
@@ -307,10 +316,7 @@ export default function Planning({
           return;
         }
 
-        // Dossiers concernés (client)
-        const dossierIds = Array.from(
-          new Set(seancesRaw.map((s: any) => s.dossier_id))
-        ).filter(Boolean);
+        const dossierIds = Array.from(new Set(seancesRaw.map((s: any) => s.dossier_id))).filter(Boolean);
         const { data: dossiers, error: dErr } = await supabase
           .from("dossiers_soins")
           .select("*")
@@ -319,10 +325,7 @@ export default function Planning({
         if (dErr) throw dErr;
         const dossierById = new Map((dossiers || []).map((d: any) => [d.id, d]));
 
-        // Patients
-        const patientIds = Array.from(
-          new Set((dossiers || []).map((d: any) => d.patient_id).filter(Boolean))
-        );
+        const patientIds = Array.from(new Set((dossiers || []).map((d: any) => d.patient_id).filter(Boolean)));
         let patientsById = new Map<string, any>();
         if (patientIds.length > 0) {
           const { data: patients, error: pErr } = await supabase
@@ -333,7 +336,6 @@ export default function Planning({
           patientsById = new Map((patients || []).map((p: any) => [p.id, p]));
         }
 
-        // Prestataires
         const prestataireIds = Array.from(
           new Set(seancesRaw.map((s: any) => s.prestataire_id).filter(Boolean))
         );
@@ -374,9 +376,9 @@ export default function Planning({
     startEnd.end,
     etatFilter,
     reloadNonce,
+    prestataireFilter,
   ]);
 
-  // Realtime : recharge quand des séances changent dans la fenêtre affichée
   useEffect(() => {
     const channel = supabase
       .channel("planning-seances-realtime")
@@ -406,15 +408,13 @@ export default function Planning({
       const hh = extractHour(s.heure_seance);
       const mm = extractMinute(s.heure_seance);
       const mmGroup = slotMinutes === 60 ? 0 : (mm < 30 ? 0 : 30);
-      const key = `${date}|${String(hh).padStart(2, "0")}|${String(
-        mmGroup
-      ).padStart(2, "0")}`;
+      const key = `${date}|${String(hh).padStart(2, "0")}|${String(mmGroup).padStart(2, "0")}`;
       m.set(key, (m.get(key) || 0) + 1);
     }
     return m;
   }, [rows, slotMinutes]);
 
-  // Navigation temporelle
+  // Navigation
   const goPrev = () => {
     const d = new Date(anchorDate);
     if (mode === "day") setAnchorDate(toDateStr(addDays(d, -1)));
@@ -432,7 +432,7 @@ export default function Planning({
     setAnchorDate(todayStr);
   };
 
-  // Grilles de dates selon vue
+  // Grilles de dates
   const daysInView = useMemo(() => {
     if (mode === "day") return [anchorDate];
     if (mode === "week") {
@@ -441,13 +441,10 @@ export default function Planning({
       const monday = addDays(d, -((wd + 6) % 7));
       return Array.from({ length: 7 }, (_, i) => toDateStr(addDays(monday, i)));
     }
-    // month => 6 semaines max
     const d = new Date(anchorDate);
     const first = new Date(d.getFullYear(), d.getMonth(), 1);
     const startMonday = addDays(first, -((first.getDay() + 6) % 7));
-    return Array.from({ length: 42 }, (_, i) =>
-      toDateStr(addDays(startMonday, i))
-    );
+    return Array.from({ length: 42 }, (_, i) => toDateStr(addDays(startMonday, i)));
   }, [anchorDate, mode]);
 
   const titleLabel = useMemo(() => {
@@ -466,62 +463,54 @@ export default function Planning({
       return `${prefix} — ${dateTxt}`;
     }
     if (mode === "week") {
-      const rangeTxt = `Semaine du ${toDateStrReadable(
-        daysInView[0]
-      )} au ${toDateStrReadable(daysInView[6])}`;
+      const rangeTxt = `Semaine du ${toDateStrReadable(daysInView[0])} au ${toDateStrReadable(
+        daysInView[6]
+      )}`;
       return `${prefix} — ${rangeTxt}`;
     }
-    const monthTxt = d.toLocaleDateString("fr-FR", {
-      year: "numeric",
-      month: "long",
-    });
+    const monthTxt = d.toLocaleDateString("fr-FR", { year: "numeric", month: "long" });
     return `${prefix} — ${monthTxt}`;
   }, [anchorDate, mode, daysInView, etatFilter]);
 
-  // Liste des séances d’un slot
+  // Liste séances d’un slot
   const sessionsOfSlot = (date: string, hour: number, minute: number) =>
     rows.filter((s) => {
       if (s.date_seance !== date) return false;
       const hh = extractHour(s.heure_seance);
       const mm = extractMinute(s.heure_seance);
-      if (slotMinutes === 60) return hh === hour; // ignore minute
+      if (slotMinutes === 60) return hh === hour;
       const start = minute;
       const end = minute + 29;
       return hh === hour && mm >= start && mm <= end;
     });
 
-  // Règles clics
+  // Règles clics (heure de Tunis pour RÉALISÉE)
   const canProgramHere = (date: string) => {
-    // Assistants: interdit; Admin: date >= aujourd’hui
     return isAdmin && etatFilter === "programmée" && date >= todayStr;
-    // (l’heure Tunis est contrôlée dans la modale)
   };
-  const canAddRealHere = (date: string, hour: number) => {
-    // Réalisées : admin = passé ou aujourd'hui ≤ heure courante ; non-admin = uniquement aujourd’hui ≤ heure courante
-    const now = new Date();
-    const t = toDateStr(now);
-    const nowH = now.getHours();
-    if (date > t) return false;
-    if (date < t) return true; // passé OK
-    return hour <= nowH;
+  const canAddRealHere = (date: string, hour: number, minute: number) => {
+    const { dateStr, hour: tnH, minute: tnM } = nowInTZ("Africa/Tunis");
+    if (date > dateStr) return false;
+    if (date < dateStr) return true;
+    if (hour > tnH) return false;
+    if (hour < tnH) return true;
+    return minute <= tnM;
   };
 
-  // Actions ouvertes depuis la liste du slot
+  // Actions
   const openEditScheduled = (s: Seance & { dossier?: DossierSoin; patient?: Patient }) =>
     setEditScheduled(s);
   const openEditRealized = (s: Seance & { dossier?: DossierSoin; patient?: Patient }) =>
     setEditRealized(s);
-  const openRealizeFromScheduled = (
-    s: Seance & { dossier?: DossierSoin; patient?: Patient }
-  ) => setRealizeFromScheduled(s);
+  const openRealizeFromScheduled = (s: Seance & { dossier?: DossierSoin; patient?: Patient }) =>
+    setRealizeFromScheduled(s);
 
-  // Export : construit les lignes normalisées pour la période choisie (programmées)
+  // Export (respecte filtre prestataire)
   const handleExport = async (kind: "pdf" | "excel") => {
     if (pdfFrom > pdfTo || pdfFrom < todayStr) {
       alert("Veuillez choisir une plage valide (à partir d’aujourd’hui).");
       return;
     }
-    // 1) charger les seances programmées dans la plage
     let q = supabase
       .from("seances")
       .select("*")
@@ -530,7 +519,10 @@ export default function Planning({
       .lte("date_seance", pdfTo)
       .order("date_seance", { ascending: true })
       .order("heure_seance", { ascending: true });
+
     if (!isAdmin) q = q.eq("prestataire_id", user?.id);
+    else if (prestataireFilter !== "all") q = q.eq("prestataire_id", prestataireFilter);
+
     const { data: seancesRaw, error } = await q;
     if (error) {
       alert(error.message || "Erreur lors du chargement des séances.");
@@ -540,7 +532,7 @@ export default function Planning({
       alert("Aucune séance sur cette période.");
       return;
     }
-    // 2) fetch dossiers -> patients / prestataires pour enrichir localement
+
     const dossierIds = Array.from(new Set(seancesRaw.map((s: any) => s.dossier_id))).filter(Boolean);
     const { data: dossiers } = await supabase.from("dossiers_soins").select("*").in("id", dossierIds);
     const dossierById = new Map((dossiers || []).map((d: any) => [d.id, d]));
@@ -554,31 +546,27 @@ export default function Planning({
     }
     let prestasById = new Map<string, any>();
     if (prestataireIds.length > 0) {
-      const { data: prestas } = await supabase
-        .from("users_base")
-        .select("id, nom, prenom")
-        .in("id", prestataireIds);
+      const { data: prestas } = await supabase.from("users_base").select("id, nom, prenom").in("id", prestataireIds);
       prestasById = new Map((prestas || []).map((u: any) => [u.id, u]));
     }
 
     const exportRows: PlanningExportRow[] = (seancesRaw || [])
-  .map((s: any) => {
-    const d = dossierById.get(s.dossier_id);
-    if (!d) return null;
-    const p = patientsById.get(d.patient_id);
-    const u = prestasById.get(s.prestataire_id);
-    return {
-      date: String(s.date_seance),
-      heure: s.heure_seance ? String(s.heure_seance).slice(0, 5) : null,
-      patient: p ? `${p.prenom} ${p.nom}` : "-",
-      motif: d?.motif || "-",
-      prestataire: u ? `${u.prenom} ${u.nom}` : "-",
-      note: s.note || null,
-      duree_minutes: s.duree_minutes ?? null, // <— NEW
-    } as PlanningExportRow;
-  })
-  .filter(Boolean) as PlanningExportRow[];
-
+      .map((s: any) => {
+        const d = dossierById.get(s.dossier_id);
+        if (!d) return null;
+        const p = patientsById.get(d.patient_id);
+        const u = prestasById.get(s.prestataire_id);
+        return {
+          date: String(s.date_seance),
+          heure: s.heure_seance ? String(s.heure_seance).slice(0, 5) : null,
+          patient: p ? `${p.prenom} ${p.nom}` : "-",
+          motif: d?.motif || "-",
+          prestataire: u ? `${u.prenom} ${u.nom}` : "-",
+          note: s.note || null,
+          duree_minutes: s.duree_minutes ?? null,
+        } as PlanningExportRow;
+      })
+      .filter(Boolean) as PlanningExportRow[];
 
     if (kind === "pdf") {
       exportProgrammationsPDFByDay(exportRows, pdfFrom, pdfTo, "Séances programmées");
@@ -589,22 +577,18 @@ export default function Planning({
 
   return (
     <div className="space-y-4">
-      {/* Header / filtres */}
+      {/* Header / Filtres — mobile-friendly layout */}
       <div className="bg-white rounded-xl shadow p-4 sm:p-6">
         <div className="flex flex-col gap-4">
-          {/* 1) Titre */}
+          {/* Titre */}
           <div>
-            <h2 className="text-xl font-bold text-gray-900">{titleLabel}</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900">{titleLabel}</h2>
           </div>
 
-          {/* 2) Navigation temps */}
+          {/* Navigation principale */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
-              <button
-                onClick={goPrev}
-                className="p-2 rounded hover:bg-gray-100 shrink-0"
-                title="Précédent"
-              >
+              <button onClick={goPrev} className="p-2 rounded hover:bg-gray-100 shrink-0" title="Précédent">
                 <ChevronLeft className="w-5 h-5" />
               </button>
 
@@ -622,9 +606,7 @@ export default function Planning({
                   >
                     {Array.from({ length: 12 }, (_, i) => i).map((m) => (
                       <option key={m} value={m}>
-                        {new Date(2000, m, 1).toLocaleDateString("fr-FR", {
-                          month: "long",
-                        })}
+                        {new Date(2000, m, 1).toLocaleDateString("fr-FR", { month: "long" })}
                       </option>
                     ))}
                   </select>
@@ -655,17 +637,13 @@ export default function Planning({
                 />
               )}
 
-              <button
-                onClick={goNext}
-                className="p-2 rounded hover:bg-gray-100 shrink-0"
-                title="Suivant"
-              >
+              <button onClick={goNext} className="p-2 rounded hover:bg-gray-100 shrink-0" title="Suivant">
                 <ChevronRight className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Outils secondaires */}
-            <div className="flex flex-wrap items-center gap-3">
+            {/* Ligne filtres compactes */}
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <button
                 onClick={goToday}
                 className="px-3 py-2 rounded-lg border text-sm hover:bg-gray-50"
@@ -674,9 +652,10 @@ export default function Planning({
                 Aujourd’hui
               </button>
 
-              {/* Vue */}
               <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">Vue</label>
+                <span className="inline-flex items-center gap-1 text-sm text-gray-600">
+                  <Filter className="w-4 h-4" /> Vue
+                </span>
                 <select
                   value={mode}
                   onChange={(e) => setMode(e.target.value as any)}
@@ -688,9 +667,8 @@ export default function Planning({
                 </select>
               </div>
 
-              {/* État */}
               <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">État</label>
+                <span className="text-sm text-gray-600">État</span>
                 <select
                   value={etatFilter}
                   onChange={(e) => setEtatFilter(e.target.value as any)}
@@ -701,9 +679,8 @@ export default function Planning({
                 </select>
               </div>
 
-              {/* Plage d’affichage */}
               <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">Plage</label>
+                <span className="text-sm text-gray-600">Plage</span>
                 <select
                   value={slotMinutes}
                   onChange={(e) => setSlotMinutes(Number(e.target.value) as 30 | 60)}
@@ -715,8 +692,29 @@ export default function Planning({
                 </select>
               </div>
 
-              {/* Export programmées */}
-              {etatFilter === "programmée" && (
+              {/* Filtre prestataire (admin) */}
+              {isAdmin && (
+                <div className="flex items-center gap-2 min-w-[200px]">
+                  <span className="text-sm text-gray-600">Prestataire</span>
+                  <select
+                    value={prestataireFilter}
+                    onChange={(e) => setPrestataireFilter(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white w-full"
+                  >
+                    <option value="all">Tous</option>
+                    {prestataires.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.prenom} {u.nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Export — groupe compact (affiché uniquement pour programmées) */}
+            {etatFilter === "programmée" && (
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 <div className="flex items-center gap-2">
                   <input
                     type="date"
@@ -735,7 +733,9 @@ export default function Planning({
                     className="px-3 py-2 border border-gray-300 rounded-lg"
                     title="À"
                   />
+                </div>
 
+                <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleExport("pdf")}
                     className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
@@ -754,8 +754,8 @@ export default function Planning({
                     Excel
                   </button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -786,7 +786,7 @@ export default function Planning({
         )}
       </div>
 
-      {/* Paneau de créneau (liste + actions) */}
+      {/* Drawer du créneau */}
       {slot && (
         <SlotDrawer
           date={slot.date}
@@ -797,7 +797,7 @@ export default function Planning({
           onOpenDossier={onOpenDossier}
           etatFilter={etatFilter}
           canProgramHere={canProgramHere(slot.date)}
-          canAddRealHere={canAddRealHere(slot.date, slot.hour)}
+          canAddRealHere={canAddRealHere(slot.date, slot.hour, slot.minute)}
           onProgram={() => setShowProgramHere(true)}
           onAddReal={() => setShowAddRealHere(true)}
           onEditScheduled={openEditScheduled}
@@ -809,7 +809,7 @@ export default function Planning({
         />
       )}
 
-      {/* Modale Programmer ici (heure/minute fixées par slot) */}
+      {/* Programmer ici */}
       {showProgramHere && slot && (
         <ProgramHereModal
           date={slot.date}
@@ -823,7 +823,7 @@ export default function Planning({
         />
       )}
 
-      {/* Modale Ajouter RÉALISÉE ici (ou convertir une programmée) */}
+      {/* Ajouter RÉALISÉE ici / Conversion */}
       {showAddRealHere && slot && (
         <AddRealHereModal
           date={slot.date}
@@ -839,7 +839,7 @@ export default function Planning({
         />
       )}
 
-      {/* Éditer une PROGRAMMÉE */}
+      {/* Édit programmé */}
       {editScheduled && (
         <EditScheduledSeanceModal
           seance={editScheduled}
@@ -852,7 +852,7 @@ export default function Planning({
         />
       )}
 
-      {/* Éditer une RÉALISÉE */}
+      {/* Édit réalisée */}
       {editRealized && (
         <EditSeanceModal
           seance={editRealized}
@@ -864,7 +864,7 @@ export default function Planning({
         />
       )}
 
-      {/* Conversion programmée → réalisée (en conservant la date/heure) */}
+      {/* Conversion programmée → réalisée */}
       {realizeFromScheduled && (
         <AddRealHereModal
           date={realizeFromScheduled.date_seance}
@@ -904,6 +904,8 @@ function TimeGrid({
   etatFilter: "programmée" | "réalisée";
   slotMinutes: 30 | 60;
 }) {
+  const { dateStr: tnDate, hour: tnH, minute: tnM } = nowInTZ("Africa/Tunis");
+
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full table-fixed border-separate border-spacing-0">
@@ -933,44 +935,37 @@ function TimeGrid({
             const isLast = idx === slots.length - 1;
             const rowBottom = isLast ? "border-b border-gray-200" : "";
 
-            // Libellé de la plage
             const label =
               slotMinutes === 60
                 ? `${String(hour).padStart(2, "0")}h–${String(hour + 1).padStart(2, "0")}h`
                 : `${String(hour).padStart(2, "0")}h${String(minute).padStart(2, "0")}–${
-                    minute === 0
-                      ? `${String(hour).padStart(2, "0")}h30`
-                      : `${String(hour + 1).padStart(2, "0")}h00`
+                    minute === 0 ? `${String(hour).padStart(2, "0")}h30` : `${String(hour + 1).padStart(2, "0")}h00`
                   }`;
 
             return (
               <tr key={`${hour}:${minute}`}>
-                {/* Colonne Heure */}
-                <td
-                  className={`sticky left-0 bg-white z-10 p-3 text-gray-700 font-medium border-r border-gray-200 border-t ${rowBottom}`}
-                >
+                <td className={`sticky left-0 bg-white z-10 p-3 text-gray-700 font-medium border-r border-gray-200 border-t ${rowBottom}`}>
                   {label}
                 </td>
 
-                {/* Colonnes jours */}
                 {days.map((d) => {
                   const mmGroup = slotMinutes === 60 ? 0 : minute;
-                  const k = `${d}|${String(hour).padStart(2, "0")}|${String(
-                    mmGroup
-                  ).padStart(2, "0")}`;
+                  const k = `${d}|${String(hour).padStart(2, "0")}|${String(mmGroup).padStart(2, "0")}`;
                   const c = countByDateSlot.get(k) || 0;
 
-                  // Désactivation selon filtre
-                  const now = new Date();
+                  // Désactivation : pour RÉALISÉE utiliser l'heure de Tunis
                   const pastDate = d < today;
-                  const future =
+                  const futureLocal =
                     d > today ||
                     (d === today &&
-                      (hour > now.getHours() ||
-                        (hour === now.getHours() && minute > now.getMinutes())));
+                      (hour > new Date().getHours() ||
+                        (hour === new Date().getHours() && minute > new Date().getMinutes())));
+
+                  const futureTN =
+                    d > tnDate || (d === tnDate && (hour > tnH || (hour === tnH && minute > tnM)));
 
                   const disabled =
-                    etatFilter === "programmée" ? pastDate : future;
+                    etatFilter === "programmée" ? pastDate : futureTN;
 
                   return (
                     <td
@@ -1033,9 +1028,7 @@ function MonthGrid({
           <button
             key={d}
             onClick={() => onOpenDay(d)}
-            className={`bg-white p-3 text-left hover:bg-gray-50 ${
-              d === today ? "bg-teal-50" : ""
-            }`}
+            className={`bg-white p-3 text-left hover:bg-gray-50 ${d === today ? "bg-teal-50" : ""}`}
             title="Voir la journée"
           >
             <div className="text-xs text-gray-500">{toDateStrReadable(d)}</div>
@@ -1049,7 +1042,7 @@ function MonthGrid({
   );
 }
 
-/* ================== Slot drawer (liste + action unique) ================== */
+/* ================== Slot drawer ================== */
 function SlotDrawer({
   date,
   hour,
@@ -1084,15 +1077,9 @@ function SlotDrawer({
   canAddRealHere: boolean;
   onProgram: () => void;
   onAddReal: () => void;
-  onEditScheduled: (
-    s: Seance & { dossier?: DossierSoin; patient?: Patient }
-  ) => void;
-  onEditRealized: (
-    s: Seance & { dossier?: DossierSoin; patient?: Patient }
-  ) => void;
-  onRealizeScheduled: (
-    s: Seance & { dossier?: DossierSoin; patient?: Patient }
-  ) => void;
+  onEditScheduled: (s: Seance & { dossier?: DossierSoin; patient?: Patient }) => void;
+  onEditRealized: (s: Seance & { dossier?: DossierSoin; patient?: Patient }) => void;
+  onRealizeScheduled: (s: Seance & { dossier?: DossierSoin; patient?: Patient }) => void;
   isAdmin: boolean;
   today: string;
   slotMinutes: 30 | 60;
@@ -1101,9 +1088,7 @@ function SlotDrawer({
   const enabled = isProg ? canProgramHere : canAddRealHere;
 
   const canOpen = (s: Seance) => Boolean(s.dossier && s.patient);
-  const isProgrammee = (s: Seance) =>
-    s.etat_seance === ("programmée" as EtatSeance) ||
-    s.etat_seance === ("programmee" as EtatSeance);
+  const isProgrammee = (s: Seance) => isProgrammeeState(s.etat_seance);
 
   const slotRangeLabel =
     slotMinutes === 60
@@ -1154,53 +1139,33 @@ function SlotDrawer({
               {items.map((s) => {
                 const openable = canOpen(s);
                 const scheduled = isProgrammee(s);
-                const timeLabel = s.heure_seance
-                  ? String(s.heure_seance).slice(0, 5)
-                  : "—";
+                const timeLabel = s.heure_seance ? String(s.heure_seance).slice(0, 5) : "—";
 
-                // blocage conversion programmée → réalisée si FUTUR (date/heure/minute)
                 const sHH = extractHour(s.heure_seance);
                 const sMM = extractMinute(s.heure_seance);
-                const isFutureItem = isFutureDateTime(
-                  s.date_seance as string,
-                  sHH,
-                  sMM
-                );
-                const canRealizeScheduled = scheduled && !isFutureItem;
+                const isFutureTN = isFutureDateTimeInTZ(s.date_seance as string, sHH, sMM, "Africa/Tunis");
+                const canRealizeScheduled = scheduled && !isFutureTN;
 
                 return (
-                  <div
-                    key={s.id}
-                    className="w-full p-3 rounded border hover:bg-gray-50"
-                  >
+                  <div key={s.id} className="w-full p-3 rounded border hover:bg-gray-50">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="font-medium text-gray-900 truncate">
-                          {s.patient
-                            ? `${s.patient.prenom} ${s.patient.nom}`
-                            : "Patient"}
+                          {s.patient ? `${s.patient.prenom} ${s.patient.nom}` : "Patient"}
                         </div>
                         <div className="text-sm text-gray-600 mt-0.5">
                           {s.dossier?.motif || "Dossier"} •{" "}
-                          {s.prestataire
-                            ? `${s.prestataire.prenom} ${s.prestataire.nom}`
-                            : "—"}{" "}
-                          • {timeLabel} {s.duree_minutes ? `• ${s.duree_minutes} min` : ""}
+                          {s.prestataire ? `${s.prestataire.prenom} ${s.prestataire.nom}` : "—"} • {timeLabel}{" "}
+                          {s.duree_minutes ? `• ${s.duree_minutes} min` : ""}
                         </div>
                       </div>
 
                       <div className="flex items-center gap-1 shrink-0">
-                        {/* Voir dossier */}
                         <button
                           disabled={!openable}
-                          onClick={() =>
-                            openable &&
-                            onOpenDossier(s.dossier!, s.patient!)
-                          }
+                          onClick={() => openable && onOpenDossier(s.dossier!, s.patient!)}
                           className={`p-2 rounded-lg transition ${
-                            openable
-                              ? "text-blue-600 hover:bg-blue-50"
-                              : "text-gray-300 cursor-not-allowed"
+                            openable ? "text-blue-600 hover:bg-blue-50" : "text-gray-300 cursor-not-allowed"
                           }`}
                           title={openable ? "Voir le dossier" : "Dossier indisponible"}
                         >
@@ -1209,24 +1174,16 @@ function SlotDrawer({
 
                         {scheduled ? (
                           <>
-                            {/* Enregistrer réalisation (icone ✅) — bloqué si futur */}
                             <button
                               onClick={() => canRealizeScheduled && onRealizeScheduled(s as any)}
                               disabled={!canRealizeScheduled}
                               className={`p-2 rounded-lg transition ${
-                                canRealizeScheduled
-                                  ? "text-emerald-700 hover:bg-emerald-50"
-                                  : "text-gray-300 cursor-not-allowed"
+                                canRealizeScheduled ? "text-emerald-700 hover:bg-emerald-50" : "text-gray-300 cursor-not-allowed"
                               }`}
-                              title={
-                                canRealizeScheduled
-                                  ? "Enregistrer la réalisation"
-                                  : "Non autorisé sur une séance future"
-                              }
+                              title={canRealizeScheduled ? "Enregistrer la réalisation" : "Non autorisé sur une séance future (heure de Tunis)"}
                             >
                               <CheckCircle2 className="w-5 h-5" />
                             </button>
-                            {/* Modifier programmée — réservé admin */}
                             {isAdmin && (
                               <button
                                 onClick={() => onEditScheduled(s as any)}
@@ -1238,7 +1195,6 @@ function SlotDrawer({
                             )}
                           </>
                         ) : (
-                          // Réalisée : modifier (admin)
                           isAdmin && (
                             <button
                               onClick={() => onEditRealized(s as any)}
@@ -1271,8 +1227,8 @@ function ProgramHereModal({
   onSuccess,
 }: {
   date: string;
-  fixedHour: number; // 8..20
-  fixedMinute: number; // 0 ou 30
+  fixedHour: number;
+  fixedMinute: number;
   onClose: () => void;
   onSuccess: () => void;
 }) {
@@ -1281,13 +1237,10 @@ function ProgramHereModal({
   const [patients, setPatients] = useState<Patient[]>([]);
   const [dossiers, setDossiers] = useState<DossierSoin[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [selectedDossier, setSelectedDossier] = useState<DossierSoin | null>(
-    null
-  );
+  const [selectedDossier, setSelectedDossier] = useState<DossierSoin | null>(null);
   const [prestataires, setPrestataires] = useState<UserBase[]>([]);
   const [prestataireId, setPrestataireId] = useState<string>(user?.id || "");
 
-  // minutes éditables (par ex. 00/30 par défaut suivant le slot)
   const [minute, setMinute] = useState<string>(String(fixedMinute).padStart(2, "0"));
   const [duree, setDuree] = useState<string>("");
 
@@ -1295,13 +1248,12 @@ function ProgramHereModal({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  const today = toDateStr(new Date());
   const { dateStr: todayTN, hour: nowH_TN, minute: nowM_TN } = useMemo(
     () => nowInTZ("Africa/Tunis"),
     []
   );
 
-  // bornes (dernière REAL et dernière PROG du dossier)
+  // bornes dossier
   const [lastProgDate, setLastProgDate] = useState<string | null>(null);
   const [lastProgTime, setLastProgTime] = useState<string | null>(null);
   const [lastRealDate, setLastRealDate] = useState<string | null>(null);
@@ -1309,7 +1261,6 @@ function ProgramHereModal({
 
   useEffect(() => {
     (async () => {
-      // Patients du client
       const { data: pts } = await supabase
         .from("patients")
         .select("*")
@@ -1334,7 +1285,6 @@ function ProgramHereModal({
         setSelectedDossier(null);
         return;
       }
-      // Dossiers en cours / à venir uniquement
       const { data } = await supabase
         .from("dossiers_soins")
         .select("*")
@@ -1353,8 +1303,9 @@ function ProgramHereModal({
       setLastRealDate(null);
       setLastRealTime(null);
       if (!selectedDossier) return;
-      const { lastProgDate, lastProgTime, lastRealDate, lastRealTime } =
-        await getLastForDossier(selectedDossier.id);
+      const { lastProgDate, lastProgTime, lastRealDate, lastRealTime } = await getLastForDossier(
+        selectedDossier.id
+      );
       setLastProgDate(lastProgDate);
       setLastProgTime(lastProgTime);
       setLastRealDate(lastRealDate);
@@ -1368,19 +1319,15 @@ function ProgramHereModal({
     const parts = q.split(/\s+/).filter(Boolean);
     if (parts.length === 1) {
       return patients.filter(
-        (p) =>
-          p.nom.toLowerCase().includes(parts[0]) ||
-          p.prenom.toLowerCase().includes(parts[0])
+        (p) => p.nom.toLowerCase().includes(parts[0]) || p.prenom.toLowerCase().includes(parts[0])
       );
     }
     return patients.filter((p) => {
       const full = `${p.prenom} ${p.nom}`.toLowerCase();
       return (
         full.includes(parts.join(" ")) ||
-        (p.prenom.toLowerCase().includes(parts[0]) &&
-          p.nom.toLowerCase().includes(parts[1])) ||
-        (p.prenom.toLowerCase().includes(parts[1]) &&
-          p.nom.toLowerCase().includes(parts[0]))
+        (p.prenom.toLowerCase().includes(parts[0]) && p.nom.toLowerCase().includes(parts[1])) ||
+        (p.prenom.toLowerCase().includes(parts[1]) && p.nom.toLowerCase().includes(parts[0]))
       );
     });
   }, [patients, search]);
@@ -1403,13 +1350,10 @@ function ProgramHereModal({
       return;
     }
 
-    // Contrôle Tunis: si la date est aujourd’hui (Tunis), l’horaire ne doit pas être passé
+    // Contrôle heure Tunis (aujourd’hui → pas dans le passé ; pas avant aujourd’hui)
     if (date === todayTN) {
       const mm = Number((minute || "00").replace(/[^\d]/g, "").slice(0, 2));
-      if (
-        fixedHour < nowH_TN ||
-        (fixedHour === nowH_TN && mm < nowM_TN)
-      ) {
+      if (fixedHour < nowH_TN || (fixedHour === nowH_TN && mm < nowM_TN)) {
         setErr("Heure invalide : ne peut pas être dans le passé (heure de Tunis).");
         return;
       }
@@ -1418,7 +1362,6 @@ function ProgramHereModal({
       return;
     }
 
-    // vérifier minutes / durée
     const mmStr = (minute || "00").replace(/[^\d]/g, "").slice(0, 2).padStart(2, "0");
     const mmNum = Number(mmStr);
     if (Number.isNaN(mmNum) || mmNum < 0 || mmNum > 59) {
@@ -1431,17 +1374,10 @@ function ProgramHereModal({
       return;
     }
 
-    // Quota
     try {
-      const { remaining, max } = await remainingSlotsForDossier(
-        selectedDossier.id
-      );
+      const { remaining, max } = await remainingSlotsForDossier(selectedDossier.id);
       if (remaining <= 0) {
-        setErr(
-          max
-            ? `Limite atteinte : ce dossier a déjà ${max} séance(s).`
-            : "Limite atteinte."
-        );
+        setErr(max ? `Limite atteinte : ce dossier a déjà ${max} séance(s).` : "Limite atteinte.");
         return;
       }
     } catch (e: any) {
@@ -1449,13 +1385,16 @@ function ProgramHereModal({
       return;
     }
 
-    // BORNES vs DERNIÈRE PROGRAMMÉE & vs DERNIÈRE RÉALISÉE
     const checkAfter = (refDate: string | null, refTime: string | null, label: string) => {
       if (!refDate) return true;
       const HH = fixedHour;
       const MM = mmNum;
       if (date < refDate) {
-        setErr(`Doit être ≥ ${label} ${new Date(refDate).toLocaleDateString("fr-FR")}${refTime ? " " + refTime : ""}.`);
+        setErr(
+          `Doit être ≥ ${label} ${new Date(refDate).toLocaleDateString("fr-FR")}${
+            refTime ? " " + refTime : ""
+          }.`
+        );
         return false;
       }
       if (date === refDate && refTime) {
@@ -1511,7 +1450,6 @@ function ProgramHereModal({
           </button>
         </div>
 
-        {/* Recherche + patient */}
         <PatientSearchBlock
           search={search}
           setSearch={setSearch}
@@ -1520,7 +1458,6 @@ function ProgramHereModal({
           patients={patients}
         />
 
-        {/* Dossiers en cours */}
         <DossiersGrid
           selectedPatient={selectedPatient}
           dossiers={dossiers}
@@ -1529,7 +1466,6 @@ function ProgramHereModal({
           showNombre
         />
 
-        {/* Heure/Minute/Durée */}
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <ReadOnlyField label="Heure (fixe)" value={String(fixedHour).padStart(2, "0")} />
           <NumberText
@@ -1546,7 +1482,6 @@ function ProgramHereModal({
           />
         </div>
 
-        {/* Prestataire (admin uniquement) */}
         {isAdmin && (
           <div className="mt-3">
             <label className="block text-sm text-gray-700 mb-1">Prestataire</label>
@@ -1564,7 +1499,6 @@ function ProgramHereModal({
           </div>
         )}
 
-        {/* Infos bornes */}
         {selectedDossier && (
           <div className="mt-2 text-xs text-gray-600 space-y-1">
             {lastProgDate && (
@@ -1577,7 +1511,9 @@ function ProgramHereModal({
                 Dernière <b>réalisée</b> : {new Date(lastRealDate).toLocaleDateString("fr-FR")} {lastRealTime || ""}
               </div>
             )}
-            <div>Heure Tunis actuelle : {String(nowH_TN).padStart(2, "0")}:{String(nowM_TN).padStart(2, "0")}</div>
+            <div>
+              Heure Tunis actuelle : {String(nowH_TN).padStart(2, "0")}:{String(nowM_TN).padStart(2, "0")}
+            </div>
           </div>
         )}
 
@@ -1609,7 +1545,7 @@ function AddRealHereModal({
   currentUserId,
   onClose,
   onSuccess,
-  scheduledSeance, // optionnel: si présent => conversion d'une programmée
+  scheduledSeance,
 }: {
   date: string;
   fixedHour: number;
@@ -1629,20 +1565,20 @@ function AddRealHereModal({
   const [prestataireId, setPrestataireId] = useState<string>(currentUserId);
 
   const [minute, setMinute] = useState<string>(String(fixedMinute).padStart(2, "0"));
-  const [montant, setMontant] = useState<string>(""); // obligatoire (pas de valeur par défaut)
+  const [montant, setMontant] = useState<string>("");
   const [note, setNote] = useState<string>(scheduledSeance?.note || "");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
 
-  const today = toDateStr(new Date());
-  const dateOK = isAdmin ? date <= today : date === today;
+  const { dateStr: tnDate, hour: tnH, minute: tnM } = nowInTZ("Africa/Tunis");
+  const dateOK = isAdmin ? date <= tnDate : date === tnDate;
 
-  // --- BORNES dernière RÉALISÉE du dossier (date + heure)
-  const [lastRealDate, setLastRealDate] = useState<string | null>(null); // "YYYY-MM-DD"
-  const [lastRealTime, setLastRealTime] = useState<string | null>(null); // "HH:MM"
+  // Dernière réalisée
+  const [lastRealDate, setLastRealDate] = useState<string | null>(null);
+  const [lastRealTime, setLastRealTime] = useState<string | null>(null);
 
-  // --- Compte des séances programmées pour le dossier sélectionné (blocage ajout si >0)
+  // Programmées existantes (blocage ajout)
   const [scheduledCount, setScheduledCount] = useState<number>(0);
 
   useEffect(() => {
@@ -1674,7 +1610,6 @@ function AddRealHereModal({
         }
         return;
       }
-      // Dossiers a_venir/en_cours
       const { data } = await supabase
         .from("dossiers_soins")
         .select("*")
@@ -1686,7 +1621,6 @@ function AddRealHereModal({
     })();
   }, [selectedPatient, scheduledSeance, userBase?.client_id]);
 
-  // Charger la DERNIÈRE séance réalisée pour le dossier choisi
   useEffect(() => {
     (async () => {
       setLastRealDate(null);
@@ -1702,16 +1636,11 @@ function AddRealHereModal({
         .limit(1);
       if (data && data.length > 0) {
         setLastRealDate(data[0].date_seance as string);
-        setLastRealTime(
-          data[0].heure_seance
-            ? String(data[0].heure_seance).slice(0, 5)
-            : "00:00"
-        );
+        setLastRealTime(data[0].heure_seance ? String(data[0].heure_seance).slice(0, 5) : "00:00");
       }
     })();
   }, [selectedDossier]);
 
-  // Charger le nombre de programmées du dossier sélectionné (sauf en conversion)
   useEffect(() => {
     (async () => {
       if (!selectedDossier || scheduledSeance) {
@@ -1738,19 +1667,15 @@ function AddRealHereModal({
     const parts = q.split(/\s+/).filter(Boolean);
     if (parts.length === 1) {
       return patients.filter(
-        (p) =>
-          p.nom.toLowerCase().includes(parts[0]) ||
-          p.prenom.toLowerCase().includes(parts[0])
+        (p) => p.nom.toLowerCase().includes(parts[0]) || p.prenom.toLowerCase().includes(parts[0])
       );
     }
     return patients.filter((p) => {
       const full = `${p.prenom} ${p.nom}`.toLowerCase();
       return (
         full.includes(parts.join(" ")) ||
-        (p.prenom.toLowerCase().includes(parts[0]) &&
-          p.nom.toLowerCase().includes(parts[1])) ||
-        (p.prenom.toLowerCase().includes(parts[1]) &&
-          p.nom.toLowerCase().includes(parts[0]))
+        (p.prenom.toLowerCase().includes(parts[0]) && p.nom.toLowerCase().includes(parts[1])) ||
+        (p.prenom.toLowerCase().includes(parts[1]) && p.nom.toLowerCase().includes(parts[0]))
       );
     });
   }, [patients, search]);
@@ -1782,14 +1707,13 @@ function AddRealHereModal({
   const handleSave = async () => {
     setErr("");
 
-    // MODE CONVERSION d'une programmée -> réalisée
+    // Conversion d'une programmée -> réalisée
     if (scheduledSeance) {
-      // Interdire conversion si FUTUR
       const sDate = scheduledSeance.date_seance as string;
       const sHH = extractHour(scheduledSeance.heure_seance);
       const sMM = extractMinute(scheduledSeance.heure_seance);
-      if (isFutureDateTime(sDate, sHH, sMM)) {
-        setErr("Impossible de marquer comme réalisée une séance future.");
+      if (isFutureDateTimeInTZ(sDate, sHH, sMM, "Africa/Tunis")) {
+        setErr("Impossible de marquer comme réalisée une séance future (heure de Tunis).");
         return;
       }
 
@@ -1820,7 +1744,7 @@ function AddRealHereModal({
       return;
     }
 
-    // --- AJOUT d'une nouvelle séance RÉALISÉE
+    // Ajout nouvelle RÉALISÉE
     if (!dateOK) {
       setErr("Date non autorisée.");
       return;
@@ -1830,7 +1754,17 @@ function AddRealHereModal({
       return;
     }
 
-    // Re-vérification : des programmées pour ce dossier ?
+    // Interdire “futur” à l’instant Tunis (même jour)
+    if (date === tnDate) {
+      const mm = (minute || "00").replace(/[^\d]/g, "").slice(0, 2).padStart(2, "0");
+      const mmNum = Number(mm);
+      if (fixedHour > tnH || (fixedHour === tnH && mmNum > tnM)) {
+        setErr("Impossible d’ajouter une séance réalisée dans le futur (heure de Tunis).");
+        return;
+      }
+    }
+
+    // Programmées à traiter d’abord ?
     {
       const { count, data, error } = await supabase
         .from("seances")
@@ -1848,19 +1782,16 @@ function AddRealHereModal({
       }
     }
 
-    // minutes
     const mm = (minute || "00").replace(/[^\d]/g, "").slice(0, 2).padStart(2, "0");
     const mmNum = Number(mm);
     if (Number.isNaN(mmNum) || mmNum < 0 || mmNum > 59) {
       setErr("Minutes invalides (0–59).");
       return;
     }
-    // BORNES vs dernière réalisée
+
     if (lastRealDate && lastRealTime) {
       if (date < lastRealDate) {
-        setErr(
-          `Date invalide : doit être ≥ ${new Date(lastRealDate).toLocaleDateString("fr-FR")}.`
-        );
+        setErr(`Date invalide : doit être ≥ ${new Date(lastRealDate).toLocaleDateString("fr-FR")}.`);
         return;
       }
       if (date === lastRealDate) {
@@ -1912,7 +1843,7 @@ function AddRealHereModal({
           const sDate = scheduledSeance!.date_seance as string;
           const sHH = extractHour(scheduledSeance!.heure_seance);
           const sMM = extractMinute(scheduledSeance!.heure_seance);
-          return isFutureDateTime(sDate, sHH, sMM);
+          return isFutureDateTimeInTZ(sDate, sHH, sMM, "Africa/Tunis");
         })()
       : (
           !dateOK ||
@@ -1920,8 +1851,7 @@ function AddRealHereModal({
           dateBeforeLast ||
           (sameDayAsLast && lastHH && fixedHour === Number(lastHH) && minuteTooSmallOrEqual) ||
           (!scheduledSeance && selectedDossier && scheduledCount > 0)
-        )
-    ) || saving;
+        )) || saving;
 
   return (
     <Modal>
@@ -1929,15 +1859,19 @@ function AddRealHereModal({
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">
             {scheduledSeance
-              ? `Enregistrer la réalisation — ${new Date(date).toLocaleDateString("fr-FR")} • ${String(fixedHour).padStart(2, "0")}h`
-              : `Ajouter une séance — ${new Date(date).toLocaleDateString("fr-FR")} • ${String(fixedHour).padStart(2, "0")}h`}
+              ? `Enregistrer la réalisation — ${new Date(date).toLocaleDateString("fr-FR")} • ${String(
+                  fixedHour
+                ).padStart(2, "0")}h`
+              : `Ajouter une séance — ${new Date(date).toLocaleDateString("fr-FR")} • ${String(fixedHour).padStart(
+                  2,
+                  "0"
+                )}h`}
           </h3>
           <button onClick={onClose} className="p-2 rounded hover:bg-gray-100">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Patient / recherche (non affiché en conversion) */}
         {!scheduledSeance && (
           <PatientSearchBlock
             search={search}
@@ -1951,7 +1885,6 @@ function AddRealHereModal({
           />
         )}
 
-        {/* Dossier */}
         {!scheduledSeance && (
           <DossiersGrid
             selectedPatient={selectedPatient}
@@ -1961,7 +1894,6 @@ function AddRealHereModal({
           />
         )}
 
-        {/* Alerte: séances programmées à traiter (ajout uniquement, pas conversion) */}
         {!scheduledSeance && selectedDossier && scheduledCount > 0 && (
           <div className="mt-2 bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded text-sm">
             Ce dossier comporte <b>{scheduledCount}</b> séance(s) programmée(s).
@@ -1970,41 +1902,29 @@ function AddRealHereModal({
           </div>
         )}
 
-        {/* HH (fixe) + MM + paiement + note + prestataire */}
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <ReadOnlyField label="Heure (fixe)" value={String(fixedHour).padStart(2, "0")} />
           <div>
             <label className="block text-sm text-gray-700 mb-1">Minutes</label>
             <input
               value={minute}
-              onChange={(e) =>
-                setMinute(e.target.value.replace(/[^\d]/g, "").slice(0, 2))
-              }
+              onChange={(e) => setMinute(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
               placeholder="MM"
               className={`w-full border rounded px-3 py-2 ${
-                sameDayAsLast &&
-                lastHH &&
-                fixedHour === Number(lastHH) &&
-                minuteTooSmallOrEqual
+                sameDayAsLast && lastHH && fixedHour === Number(lastHH) && minuteTooSmallOrEqual
                   ? "border-red-300"
                   : "border-gray-300"
               }`}
-              disabled={!!scheduledSeance} // conversion : heure/minute inchangées
+              disabled={!!scheduledSeance}
             />
             {sameDayAsLast && lastRealTime && fixedHour === Number(lastHH) && !scheduledSeance && (
-              <p
-                className={`text-xs mt-1 ${
-                  minuteTooSmallOrEqual ? "text-red-600" : "text-gray-500"
-                }`}
-              >
+              <p className={`text-xs mt-1 ${minuteTooSmallOrEqual ? "text-red-600" : "text-gray-500"}`}>
                 Minutes &gt; {lastRealTime}
               </p>
             )}
           </div>
           <div>
-            <label className="block text-sm text-gray-700 mb-1">
-              Montant payé (DT) *
-            </label>
+            <label className="block text-sm text-gray-700 mb-1">Montant payé (DT) *</label>
             <input
               type="number"
               step="0.01"
@@ -2016,7 +1936,6 @@ function AddRealHereModal({
           </div>
         </div>
 
-        {/* Prestataire : supprimer le champ texte — garder seulement la liste si admin */}
         {isAdmin && (
           <div className="mt-3">
             <label className="block text-sm text-gray-700 mb-1">Prestataire</label>
@@ -2056,11 +1975,7 @@ function AddRealHereModal({
             disabled={disableSave}
             className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded disabled:opacity-50"
           >
-            {saving
-              ? "Enregistrement…"
-              : scheduledSeance
-              ? "Marquer comme réalisée"
-              : "Ajouter"}
+            {saving ? "Enregistrement…" : scheduledSeance ? "Marquer comme réalisée" : "Ajouter"}
           </button>
         </div>
       </div>
@@ -2068,14 +1983,12 @@ function AddRealHereModal({
   );
 }
 
-/* ================== Petits composants réutilisables ================== */
+/* ================== Petits composants ================== */
 function Modal({ children }: { children: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-[1000]">
       <div className="absolute inset-0 bg-black/50" />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        {children}
-      </div>
+      <div className="absolute inset-0 flex items-center justify-center p-4">{children}</div>
     </div>
   );
 }
@@ -2099,19 +2012,15 @@ function PatientSearchBlock({
     const parts = q.split(/\s+/).filter(Boolean);
     if (parts.length === 1) {
       return patients.filter(
-        (p) =>
-          p.nom.toLowerCase().includes(parts[0]) ||
-          p.prenom.toLowerCase().includes(parts[0])
+        (p) => p.nom.toLowerCase().includes(parts[0]) || p.prenom.toLowerCase().includes(parts[0])
       );
     }
     return patients.filter((p) => {
       const full = `${p.prenom} ${p.nom}`.toLowerCase();
       return (
         full.includes(parts.join(" ")) ||
-        (p.prenom.toLowerCase().includes(parts[0]) &&
-          p.nom.toLowerCase().includes(parts[1])) ||
-        (p.prenom.toLowerCase().includes(parts[1]) &&
-          p.nom.toLowerCase().includes(parts[0]))
+        (p.prenom.toLowerCase().includes(parts[0]) && p.nom.toLowerCase().includes(parts[1])) ||
+        (p.prenom.toLowerCase().includes(parts[1]) && p.nom.toLowerCase().includes(parts[0]))
       );
     });
   }, [patients, search]);
@@ -2188,9 +2097,7 @@ function DossiersGrid({
         Dossier{selectedPatient ? " non clôturé" : ""}
       </label>
       {!selectedPatient ? (
-        <div className="text-sm text-gray-500">
-          Choisissez d’abord un patient.
-        </div>
+        <div className="text-sm text-gray-500">Choisissez d’abord un patient.</div>
       ) : dossiers.length === 0 ? (
         <div className="text-sm text-gray-500">
           Aucun dossier non clôturé avec des séances restante à programmer pour ce patient.
@@ -2202,16 +2109,12 @@ function DossiersGrid({
               key={d.id}
               onClick={() => setSelectedDossier(d)}
               className={`p-3 rounded border text-left hover:bg-gray-50 ${
-                selectedDossier?.id === d.id
-                  ? "border-teal-500 ring-1 ring-teal-200"
-                  : ""
+                selectedDossier?.id === d.id ? "border-teal-500 ring-1 ring-teal-200" : ""
               }`}
             >
               <div className="font-medium">{d.motif}</div>
               <div className="text-xs text-gray-500 mt-1">
-                {showNombre && d.nombre_seances
-                  ? `${d.nombre_seances} prévues • `
-                  : ""}
+                {showNombre && d.nombre_seances ? `${d.nombre_seances} prévues • ` : ""}
                 {d.etat}
               </div>
             </button>
@@ -2226,11 +2129,7 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <label className="block text-sm text-gray-700 mb-1">{label}</label>
-      <input
-        value={value}
-        disabled
-        className="w-full border rounded px-3 py-2 bg-gray-50 text-gray-600"
-      />
+      <input value={value} disabled className="w-full border rounded px-3 py-2 bg-gray-50 text-gray-600" />
     </div>
   );
 }
@@ -2248,21 +2147,12 @@ function NumberText({
   return (
     <div>
       <label className="block text-sm text-gray-700 mb-1">{label}</label>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full border rounded px-3 py-2"
-      />
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="w-full border rounded px-3 py-2" />
     </div>
   );
 }
 function ErrorNote({ text }: { text: string }) {
-  return (
-    <div className="mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2">
-      {text}
-    </div>
-  );
+  return <div className="mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2">{text}</div>;
 }
 
 /* helper */
