@@ -705,7 +705,7 @@ export default function AdminAnalytics({
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Prestataire</th>
-                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-700">Séances</th>
+                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-700">Séances réalisées</th>
                     <th className="px-4 py-2 text-right text-sm font-medium text-gray-700">Total encaissement (DT)</th>
                   </tr>
                 </thead>
