@@ -561,7 +561,7 @@ export default function Planning({
       prestasById = new Map((prestas || []).map((u: any) => [u.id, u]));
     }
 
-    const exportRows: PlanningExportRow[] = (seancesRaw || [])
+  const exportRows: PlanningExportRow[] = (seancesRaw || [])
   .map((s: any) => {
     const d = dossierById.get(s.dossier_id);
     if (!d) return null;
@@ -573,11 +573,12 @@ export default function Planning({
       patient: p ? `${p.prenom} ${p.nom}` : "-",
       motif: d?.motif || "-",
       prestataire: u ? `${u.prenom} ${u.nom}` : "-",
-      dureeMinutes: s.duree_minutes != null ? Number(s.duree_minutes) : null, // 🔹 nouvelle colonne
       note: s.note || null,
+      duree_minutes: s.duree_minutes ?? null, // <— NEW
     } as PlanningExportRow;
-      })
-      .filter(Boolean) as PlanningExportRow[];
+  })
+  .filter(Boolean) as PlanningExportRow[];
+
 
     if (kind === "pdf") {
       exportProgrammationsPDFByDay(exportRows, pdfFrom, pdfTo, "Séances programmées");
