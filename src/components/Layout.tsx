@@ -1,5 +1,5 @@
 // src/components/Layout.tsx
-import React, { ReactNode, useEffect, useMemo, useState } from 'react';
+import React, { ReactNode, useEffect, useState } from 'react';
 import { Send, Inbox, Bell } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { LogOut, Users, FileText, Calendar, Settings, BarChart3, CalendarRange } from 'lucide-react';
@@ -19,19 +19,14 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
   const isAdmin = userBase?.type_utilisateur === 'admin';
   const clientId = userBase?.client_id ?? null;
 
-  // true  -> il existe au moins un assistant pour ce client
-  // false -> aucun assistant trouvé
-  // null  -> inconnu (chargement)
   const [hasAssistants, setHasAssistants] = useState<boolean | null>(null);
 
-  // --- Compteur de nouveaux tickets pour l'admin (du jour) ---
-  const { count: newTicketsCount, markAsSeen, refresh } = useNewTicketsIndicator(clientId, isAdmin);
+  const { count: newTicketsCount, markAsSeen } = useNewTicketsIndicator(clientId, isAdmin);
   const showTicketsUI = isAdmin && hasAssistants === true;
 
   useEffect(() => {
     let cancelled = false;
-
-    const checkAssistants = async () => {
+    (async () => {
       if (!isAdmin || !clientId) {
         setHasAssistants(null);
         return;
@@ -43,7 +38,6 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
           .eq('client_id', clientId)
           .eq('type_utilisateur', 'assistant')
           .limit(1);
-
         if (cancelled) return;
         if (error) {
           console.error('Erreur vérification assistants:', error);
@@ -57,47 +51,41 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
           setHasAssistants(false);
         }
       }
-    };
-
-    checkAssistants();
-    return () => {
-      cancelled = true;
-    };
+    })();
+    return () => { cancelled = true; };
   }, [isAdmin, clientId]);
 
-  // Si l’admin n’a pas d’assistants et qu’on est sur l’onglet “tickets_admin”, on renvoie vers Analyse
   useEffect(() => {
     if (isAdmin && hasAssistants === false && currentView === 'tickets_admin') {
       onNavigate('analyse');
     }
   }, [isAdmin, hasAssistants, currentView, onNavigate]);
 
-  // Quand on arrive déjà sur la page tickets_admin, purge le badge
   useEffect(() => {
     if (showTicketsUI && currentView === 'tickets_admin') {
       markAsSeen();
     }
   }, [showTicketsUI, currentView, markAsSeen]);
 
-  const handleSignOut = async (e?: React.PointerEvent | React.MouseEvent) => {
+  const handleSignOut = async (e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
     if (signingOut) return;
     setSigningOut(true);
     try {
+      // ✅ Attendre la fin de la déconnexion (Supabase vide la session)
       await signOut();
+      // ✅ NE PAS recharger : laisser l’AuthContext remonter l’écran de login
+      // (si besoin de rediriger, fais-le ici vers la route "login" de ton router)
+      // ex: navigate('/login')
     } catch (err) {
       console.error('Erreur déconnexion:', err);
     } finally {
-      // replace() évite certains états bizarres de back stack sur iOS/PWA
-      if (typeof window !== 'undefined') {
-        window.location.replace(window.location.href);
-      }
       setSigningOut(false);
     }
   };
 
-  const goTicketsAdmin = async (e?: React.PointerEvent | React.MouseEvent) => {
+  const goTicketsAdmin = async (e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
     if (!showTicketsUI) return;
@@ -118,7 +106,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
               {showTicketsUI && (
                 <button
                   type="button"
-                  onPointerUp={goTicketsAdmin}
+                  onClick={goTicketsAdmin}
                   aria-label="Tickets collaborateurs"
                   className="relative p-3 sm:p-3 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition active:opacity-80 touch-manipulation select-none"
                   title="Tickets collaborateurs"
@@ -143,9 +131,12 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
 
               <button
                 type="button"
-                onPointerUp={handleSignOut}
+                onClick={handleSignOut}
                 aria-label="Déconnexion"
-                className="p-3 sm:p-3 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition active:opacity-80 touch-manipulation select-none"
+                disabled={signingOut}
+                className={`p-3 sm:p-3 rounded-lg transition touch-manipulation select-none ${
+                  signingOut ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:opacity-80'
+                }`}
                 title="Déconnexion"
               >
                 <LogOut className="w-6 h-6 sm:w-5 sm:h-5 pointer-events-none" />
@@ -251,11 +242,11 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
               </button>
             )}
 
-            {/* Tickets collaborateurs (admin) — visible uniquement s’il y a des assistants) */}
+            {/* Tickets collaborateurs (admin) */}
             {showTicketsUI && (
               <button
                 type="button"
-                onPointerUp={goTicketsAdmin}
+                onClick={goTicketsAdmin}
                 className={`relative flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition whitespace-nowrap ${
                   currentView === 'tickets_admin'
                     ? 'bg-teal-50 text-teal-700'
@@ -264,8 +255,6 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
               >
                 <Inbox className="w-4 h-4 pointer-events-none" />
                 <span>Tickets staff</span>
-
-                {/* Badge mini dans l’onglet */}
                 {newTicketsCount > 0 && (
                   <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px]">
                     {newTicketsCount > 99 ? '99+' : newTicketsCount}
