@@ -28,7 +28,13 @@ type KPIsPeriod = {
   dossiersClotures: number;
   seancesRealisees: number;
   patientsDistincts: number;
-  parPrestataire: { prestataire_id: string; nom: string; prenom: string; total: number }[];
+  parPrestataire: {
+    prestataire_id: string;
+    nom: string;
+    prenom: string;
+    totalSeances: number;
+    encaissement: number;
+  }[];
 };
 
 /** Filtres de dashboard envoyés lors d’un clic sur une tuile */
@@ -52,7 +58,8 @@ export default function AdminAnalytics({
   const { userBase } = useAuth();
   const isAdmin = userBase?.type_utilisateur === 'admin';
   const clientId = userBase?.client_id || null;
-  // ➕ NEW: savoir s'il existe au moins un assistant pour ce client
+
+  // savoir s'il existe au moins un assistant pour ce client
   const [hasAssistants, setHasAssistants] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -79,6 +86,7 @@ export default function AdminAnalytics({
     checkAssistants();
     return () => { cancelled = true; };
   }, [isAdmin, clientId]);
+
   /* ---------------- Utils dates (Tunis) ---------------- */
   const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -237,25 +245,33 @@ export default function AdminAnalytics({
 
       const dossierIds = (dossiers || []).map((d) => d.id);
 
+      // IMPORTANT: ne prendre QUE les séances RÉALISÉES dans la période
       let seances: Seance[] = [];
       if (dossierIds.length > 0) {
         const { data: _seances, error: sErr } = await supabase
           .from('seances')
-          .select('id, dossier_id, prestataire_id, montant_paye, date_seance')
+          .select('id, dossier_id, prestataire_id, montant_paye, date_seance, etat_seance')
           .in('dossier_id', dossierIds)
+          .in('etat_seance', ['réalisée', 'realisee'])
           .gte('date_seance', effectiveRange.start)
           .lte('date_seance', effectiveRange.end);
         if (sErr) throw sErr;
         seances = _seances || [];
       }
 
+      // Total encaissements = somme des montants payés des séances réalisées
       const totalEncaissements = seances.reduce((sum, s) => sum + (Number(s.montant_paye) || 0), 0);
+
+      // Séances réalisées = nombre de séances réalisées
       const seancesRealisees = seances.length;
 
+      // Agrégations par prestataire (compte + encaissement)
       const countsByPrestataire: Record<string, number> = {};
+      const sumsByPrestataire: Record<string, number> = {};
       for (const s of seances) {
         const k = s.prestataire_id || 'unknown';
         countsByPrestataire[k] = (countsByPrestataire[k] || 0) + 1;
+        sumsByPrestataire[k] = (sumsByPrestataire[k] || 0) + (Number(s.montant_paye) || 0);
       }
       const prestataireIds = Object.keys(countsByPrestataire).filter((id) => id !== 'unknown');
       let mapUsers = new Map<string, Pick<UserBase, 'id' | 'nom' | 'prenom'>>();
@@ -267,11 +283,21 @@ export default function AdminAnalytics({
         if (uErr) throw uErr;
         mapUsers = new Map((users || []).map((u) => [u.id, u]));
       }
-      const parPrestataire = Object.entries(countsByPrestataire).map(([id, total]) => {
-        const u = mapUsers.get(id);
-        return { prestataire_id: id, nom: u?.nom || '', prenom: u?.prenom || '', total };
-      });
+      const parPrestataire: KPIsPeriod['parPrestataire'] = Object.entries(countsByPrestataire).map(
+        ([id, totalSeances]) => {
+          const u = mapUsers.get(id);
+          const encaissement = sumsByPrestataire[id] || 0;
+          return {
+            prestataire_id: id,
+            nom: u?.nom || '',
+            prenom: u?.prenom || '',
+            totalSeances,
+            encaissement,
+          };
+        }
+      );
 
+      // Dossiers ouverts pendant la période (sur created_at)
       const dossiersOuverts =
         dossiers?.filter(
           (d) =>
@@ -280,11 +306,13 @@ export default function AdminAnalytics({
             d.created_at <= `${effectiveRange.end}T23:59:59.999Z`,
         ).length || 0;
 
+      // Dossiers clôturés pendant la période (etat=termine + date_fin dans la période)
       const dossiersClotures =
         dossiers?.filter(
           (d) => d.etat === 'termine' && d.date_fin && d.date_fin >= effectiveRange.start && d.date_fin <= effectiveRange.end,
         ).length || 0;
 
+      // Nouveaux patients = patients des dossiers ouverts dans la période
       const patientIds = new Set<string>();
       for (const d of dossiers || []) {
         if (
@@ -404,7 +432,7 @@ export default function AdminAnalytics({
       { label: 'Total encaissements (DT)', value: periodKPIs.totalEncaissements.toFixed(2), color: [20,115,108] },
       { label: 'Nouveaux patients', value: String(periodKPIs.patientsDistincts), color: [60,60,60] },
       { label: 'Dossiers ouverts', value: String(periodKPIs.dossiersOuverts), color: [60,60,60] },
-      { label: 'Dossiers clôturés', value: String(periodKPIs.dossiersClotres), color: [60,60,60] },
+      { label: 'Dossiers clôturés', value: String(periodKPIs.dossiersClotures), color: [60,60,60] },
       { label: 'Séances réalisées', value: String(periodKPIs.seancesRealisees), color: [60,60,60] },
     ];
 
@@ -432,19 +460,21 @@ export default function AdminAnalytics({
       doc.setTextColor(0);
     }
 
+    // Tableau par prestataire: + colonne Total (DT)
     autoTable(doc, {
       startY: y + cardH + 10,
-      head: [['Prestataire', 'Séances']],
+      head: [['Prestataire', 'Séances', 'Total (DT)']],
       body:
         periodKPIs.parPrestataire.length > 0
           ? periodKPIs.parPrestataire.map((p) => [
               p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—',
-              String(p.total),
+              String(p.totalSeances),
+              (p.encaissement ?? 0).toFixed(2),
             ])
-          : [['—', '0']],
+          : [['—', '0', '0.00']],
       styles: { font: 'helvetica', fontSize: 10, cellPadding: 6 },
       headStyles: { fillColor: [20, 115, 108], textColor: 255, halign: 'left' },
-      columnStyles: { 1: { halign: 'right' } },
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
       theme: 'grid',
       margin: { left: 36, right: 36 },
     });
@@ -652,7 +682,6 @@ export default function AdminAnalytics({
 
       {/* KPIs période */}
       <div className="bg-white rounded-xl shadow p-6 space-y-6">
-        {/* Titre période (s’affiche désormais correctement) */}
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900">
             Indicateurs sur la période du {formatDateFR(effectiveRange.start)} au {formatDateFR(effectiveRange.end)}
@@ -663,44 +692,46 @@ export default function AdminAnalytics({
           <KpiCard label="Total encaissements (DT)" value={periodKPIs.totalEncaissements.toFixed(2)} loading={loadingPeriod} valueClassName="text-teal-700" />
           <KpiCard label="Nouveaux patients" value={periodKPIs.patientsDistincts} loading={loadingPeriod} valueClassName="text-gray-800" />
           <KpiCard label="Dossiers ouverts" value={periodKPIs.dossiersOuverts} loading={loadingPeriod} valueClassName="text-gray-800" />
-          <KpiCard label="Dossiers clôturés" value={periodKPIs.dossiersClotres ?? periodKPIs.dossiersClotures} loading={loadingPeriod} valueClassName="text-gray-800" />
+          <KpiCard label="Dossiers clôturés" value={periodKPIs.dossiersClotures} loading={loadingPeriod} valueClassName="text-gray-800" />
           <KpiCard label="Séances réalisées" value={periodKPIs.seancesRealisees} loading={loadingPeriod} valueClassName="text-gray-800" />
         </div>
 
-        {/* ➕ NEW: afficher la table seulement s'il y a des assistants */}
-  {hasAssistants ? (
-    <div className="mt-4">
-      <h3 className="text-lg font-semibold text-gray-900 mb-3">Séances par prestataire</h3>
-      <div className="overflow-x-auto">
-        <table className="min-w-full border divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Prestataire</th>
-              <th className="px-4 py-2 text-right text-sm font-medium text-gray-700">Séances</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loadingPeriod ? (
-              <tr>
-                <td colSpan={2} className="px-4 py-6 text-center text-gray-500">Chargement…</td>
-              </tr>
-            ) : periodKPIs.parPrestataire.length === 0 ? (
-              <tr>
-                <td colSpan={2} className="px-4 py-6 text-center text-gray-500">Aucune séance sur la période</td>
-              </tr>
-            ) : (
-              periodKPIs.parPrestataire.map((p) => (
-                <tr key={p.prestataire_id} className="odd:bg-white even:bg-gray-50">
-                  <td className="px-4 py-2 text-sm text-gray-900">{p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—'}</td>
-                  <td className="px-4 py-2 text-sm text-gray-900 text-right">{p.total}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  ) : null}
+        {/* Tableau par prestataire: Séances réalisées + Total encaissement */}
+        {hasAssistants ? (
+          <div className="mt-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">Séances par prestataire</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full border divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Prestataire</th>
+                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-700">Séances</th>
+                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-700">Total encaissement (DT)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loadingPeriod ? (
+                    <tr>
+                      <td colSpan={3} className="px-4 py-6 text-center text-gray-500">Chargement…</td>
+                    </tr>
+                  ) : periodKPIs.parPrestataire.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-4 py-6 text-center text-gray-500">Aucune séance sur la période</td>
+                    </tr>
+                  ) : (
+                    periodKPIs.parPrestataire.map((p) => (
+                      <tr key={p.prestataire_id} className="odd:bg-white even:bg-gray-50">
+                        <td className="px-4 py-2 text-sm text-gray-900">{p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-900 text-right">{p.totalSeances}</td>
+                        <td className="px-4 py-2 text-sm text-gray-900 text-right">{p.encaissement.toFixed(2)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
