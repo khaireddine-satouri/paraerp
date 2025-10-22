@@ -368,127 +368,151 @@ export default function AdminAnalytics({
     }).format(d);
 
   const downloadPDF = () => {
-    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-    const padX = 36;
-    const pageW = doc.internal.pageSize.getWidth();
-    let y = 40;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const padX = 36;
+  const pageW = doc.internal.pageSize.getWidth();
+  let y = 40;
+
+  const formatDateFR = (iso: string) => {
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
+  const formatTunisTitle = (d: Date) =>
+    new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d);
+  const formatTunisFooter = (d: Date) =>
+    new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(d);
+
+  // Titre
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.text('Analyse — Statistiques', padX, y);
+  y += 22;
+
+  // Instantané
+  const tsNow = formatTunisTitle(new Date());
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Indicateurs instantanés — ' + tsNow, padX, y);
+  y += 10;
+
+  const tilesNow = [
+    { label: 'Dossiers à venir', value: String(nowKPIs.a_venir) },
+    { label: 'Dossiers en cours', value: String(nowKPIs.en_cours) },
+    { label: 'Dossiers en cours inactifs', value: String(nowKPIs.en_cours_inactifs) },
+    { label: 'Dossiers en cours débiteurs', value: String(nowKPIs.en_cours_debiteurs) },
+  ];
+  const cardW = 240, cardH = 64, gap = 14;
+  let x = padX;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11);
+  for (const t of tilesNow) {
+    doc.setDrawColor(225);
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(x, y, cardW, cardH, 6, 6, 'FD');
+
+    doc.setTextColor(90);
+    doc.text(t.label, x + 12, y + 22);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(20);
-    doc.text('Analyse — Statistiques', padX, y);
-    y += 22;
+    doc.setFontSize(16);
+    doc.setTextColor(20, 115, 108);
+    doc.text(t.value, x + 12, y + 46);
 
-    const tsNow = formatTunisTitle(new Date());
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('Indicateurs instantanés — ' + tsNow, padX, y);
-    y += 10;
-
-    const tilesNow = [
-      { label: 'Dossiers à venir', value: String(nowKPIs.a_venir) },
-      { label: 'Dossiers en cours', value: String(nowKPIs.en_cours) },
-      { label: 'Dossiers en cours inactifs', value: String(nowKPIs.en_cours_inactifs) },
-      { label: 'Dossiers en cours débiteurs', value: String(nowKPIs.en_cours_debiteurs) },
-    ];
-    const cardW = 240, cardH = 64, gap = 14;
-    let x = padX;
-
+    x += cardW + gap;
+    if (x + cardW > pageW - padX) {
+      x = padX;
+      y += cardH + gap;
+    }
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    for (const t of tilesNow) {
-      doc.setDrawColor(225);
-      doc.setFillColor(248, 250, 252);
-      doc.roundedRect(x, y, cardW, cardH, 6, 6, 'FD');
+    doc.setTextColor(0);
+  }
+  y += cardH + 12;
 
-      doc.setTextColor(90);
-      doc.text(t.label, x + 12, y + 22);
+  // Période
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(
+    `Indicateurs sur la période du ${formatDateFR(effectiveRange.start)} au ${formatDateFR(effectiveRange.end)}`,
+    padX,
+    y
+  );
+  y += 10;
 
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(16);
-      doc.setTextColor(20, 115, 108);
-      doc.text(t.value, x + 12, y + 46);
+  const tilesPeriod = [
+    { label: 'Total encaissements (DT)', value: periodKPIs.totalEncaissements.toFixed(2), color: [20,115,108] as [number,number,number] },
+    { label: 'Nouveaux patients', value: String(periodKPIs.patientsDistincts), color: [60,60,60] as [number,number,number] },
+    { label: 'Dossiers ouverts', value: String(periodKPIs.dossiersOuverts), color: [60,60,60] as [number,number,number] },
+    { label: 'Dossiers clôturés', value: String(periodKPIs.dossiersClotures), color: [60,60,60] as [number,number,number] },
+    { label: 'Séances réalisées', value: String(periodKPIs.seancesRealisees), color: [60,60,60] as [number,number,number] },
+  ];
 
-      x += cardW + gap;
-      if (x + cardW > pageW - padX) {
-        x = padX;
-        y += cardH + gap;
-      }
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(11);
-      doc.setTextColor(0);
-    }
-    y += cardH + 12;
+  x = padX;
+  for (const t of tilesPeriod) {
+    doc.setDrawColor(225);
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(x, y, cardW, cardH, 6, 6, 'FD');
+
+    doc.setTextColor(90);
+    doc.text(t.label, x + 12, y + 22);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text(
-      `Indicateurs sur la période du ${formatDateFR(effectiveRange.start)} au ${formatDateFR(effectiveRange.end)}`,
-      padX,
-      y
-    );
-    y += 10;
+    doc.setFontSize(16);
+    doc.setTextColor(...t.color);
+    doc.text(t.value, x + 12, y + 46);
 
-    const tilesPeriod = [
-      { label: 'Total encaissements (DT)', value: periodKPIs.totalEncaissements.toFixed(2), color: [20,115,108] },
-      { label: 'Nouveaux patients', value: String(periodKPIs.patientsDistincts), color: [60,60,60] },
-      { label: 'Dossiers ouverts', value: String(periodKPIs.dossiersOuverts), color: [60,60,60] },
-      { label: 'Dossiers clôturés', value: String(periodKPIs.dossiersClotures), color: [60,60,60] },
-      { label: 'Séances réalisées', value: String(periodKPIs.seancesRealisees), color: [60,60,60] },
-    ];
-
-    x = padX;
-    for (const t of tilesPeriod) {
-      doc.setDrawColor(225);
-      doc.setFillColor(248, 250, 252);
-      doc.roundedRect(x, y, cardW, cardH, 6, 6, 'FD');
-
-      doc.setTextColor(90);
-      doc.text(t.label, x + 12, y + 22);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(16);
-      doc.setTextColor(...(t.color as [number,number,number]));
-      doc.text(t.value, x + 12, y + 46);
-
-      x += cardW + gap;
-      if (x + cardW > pageW - padX) {
-        x = padX;
-        y += cardH + gap;
-      }
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(11);
-      doc.setTextColor(0);
+    x += cardW + gap;
+    if (x + cardW > pageW - padX) {
+      x = padX;
+      y += cardH + gap;
     }
-
-    // Tableau par prestataire: + colonne Total (DT)
-    autoTable(doc, {
-      startY: y + cardH + 10,
-      head: [['Prestataire', 'Séances', 'Total (DT)']],
-      body:
-        periodKPIs.parPrestataire.length > 0
-          ? periodKPIs.parPrestataire.map((p) => [
-              p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—',
-              String(p.totalSeances),
-              (p.encaissement ?? 0).toFixed(2),
-            ])
-          : [['—', '0', '0.00']],
-      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6 },
-      headStyles: { fillColor: [20, 115, 108], textColor: 255, halign: 'left' },
-      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
-      theme: 'grid',
-      margin: { left: 36, right: 36 },
-    });
-
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(120);
+    doc.setFontSize(11);
+    doc.setTextColor(0);
+  }
 
-    const footerText = `Généré le ${formatTunisFooter(new Date())} (heure de Tunis)`;
-    const textWidth = (doc.getStringUnitWidth(footerText) * doc.internal.getFontSize()) / doc.internal.scaleFactor;
-    doc.text(footerText, (pageW - textWidth) / 2, doc.internal.pageSize.getHeight() - 18);
+  // Tableau par prestataire (réalisées uniquement) + Total (DT)
+  autoTable(doc, {
+    startY: y + cardH + 10,
+    head: [['Prestataire', 'Séances', 'Total (DT)']],
+    body:
+      periodKPIs.parPrestataire.length > 0
+        ? periodKPIs.parPrestataire.map((p) => [
+            p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—',
+            String(p.totalSeances),
+            (p.encaissement ?? 0).toFixed(2),
+          ])
+        : [['—', '0', '0.00']],
+    styles: { font: 'helvetica', fontSize: 10, cellPadding: 6 },
+    headStyles: { fillColor: [20, 115, 108], textColor: 255, halign: 'left' },
+    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+    theme: 'grid',
+    margin: { left: 36, right: 36 },
+  });
 
-    doc.save(`analytics_${effectiveRange.start}_${effectiveRange.end}.pdf`);
-  };
+  // Pied de page
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  const footerText = `Généré le ${formatTunisFooter(new Date())} (heure de Tunis)`;
+  const textWidth = (doc.getStringUnitWidth(footerText) * doc.internal.getFontSize()) / doc.internal.scaleFactor;
+  doc.text(footerText, (pageW - textWidth) / 2, doc.internal.pageSize.getHeight() - 18);
+
+  doc.save(`analytics_${effectiveRange.start}_${effectiveRange.end}.pdf`);
+};
+
 
   if (!isAdmin) {
     return <div className="p-6 text-gray-600">Accès réservé aux administrateurs.</div>;
