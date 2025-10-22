@@ -562,21 +562,23 @@ export default function Planning({
     }
 
     const exportRows: PlanningExportRow[] = (seancesRaw || [])
-      .map((s: any) => {
-        const d = dossierById.get(s.dossier_id);
-        if (!d) return null;
-        const p = patientsById.get(d.patient_id);
-        const u = prestasById.get(s.prestataire_id);
-        return {
-          date: String(s.date_seance),
-          heure: s.heure_seance ? String(s.heure_seance).slice(0, 5) : null,
-          patient: p ? `${p.prenom} ${p.nom}` : "-",
-          motif: d?.motif || "-",
-          prestataire: u ? `${u.prenom} ${u.nom}` : "-",
-          note: s.note || null,
-        } as PlanningExportRow;
-      })
-      .filter(Boolean) as PlanningExportRow[];
+  .map((s: any) => {
+    const d = dossierById.get(s.dossier_id);
+    if (!d) return null;
+    const p = patientsById.get(d.patient_id);
+    const u = prestasById.get(s.prestataire_id);
+    return {
+      date: String(s.date_seance),
+      heure: s.heure_seance ? String(s.heure_seance).slice(0, 5) : null,
+      patient: p ? `${p.prenom} ${p.nom}` : "-",
+      motif: d?.motif || "-",
+      prestataire: u ? `${u.prenom} ${u.nom}` : "-",
+      note: s.note || null,
+      duree_minutes: s.duree_minutes ?? null, // <— NEW
+    } as PlanningExportRow;
+  })
+  .filter(Boolean) as PlanningExportRow[];
+
 
     if (kind === "pdf") {
       exportProgrammationsPDFByDay(exportRows, pdfFrom, pdfTo, "Séances programmées");
