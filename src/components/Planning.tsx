@@ -760,7 +760,6 @@ export default function Planning({
   </div>
 )}
 
-            )}
           </div>
         </div>
       </div>
