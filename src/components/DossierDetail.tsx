@@ -1344,7 +1344,7 @@ function RealizeScheduledInlineModal({
 
       // Prix obligatoire
       if (montantPaye.trim() === '') {
-        setErr('Le montant payé est obligatoire.');
+        setErr('Le montant est obligatoire.');
         setLoading(false);
         return;
       }
