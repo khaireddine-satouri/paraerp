@@ -113,7 +113,7 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
           .filter((k) => k > currentKeyOrig)
           .sort();
         setNextRealKey(greater.length ? greater[0] : null);
-      } catch (e) {
+      } catch {
         setPrevRealKey(null);
         setNextRealKey(null);
       }
@@ -148,39 +148,58 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
 
   const canSave = !isFuture && minuteValid && !violatesPrev && !violatesNext;
 
-  // Handlers (clamp "aujourd’hui/Tunis")
+  /* ----------------- Handlers (clamp vers le PASSÉ uniquement) -----------------
+     Ancien bug : l’UI forçait l’horaire minimum à “maintenant” pour aujourd’hui,
+     empêchant de choisir un horaire passé.
+     Nouveau comportement : on autorise tout horaire passé, on BLOQUE seulement le futur.
+  -------------------------------------------------------------------------------*/
   const onChangeDate = (v: string) => {
-    setDate(v);
-    if (v === todayTN) {
+    // ⛔ pas de jour futur
+    const next = v > todayTN ? todayTN : v;
+    setDate(next);
+
+    // si la nouvelle date est aujourd’hui et que l’horaire saisi est futur -> on rabat au max = maintenant
+    if (next === todayTN) {
       const hNum = Number(hour || "0");
-      if (hNum < curH_TN) setHour(String(curH_TN).padStart(2, "0"));
-      if (hNum === curH_TN) {
-        const mNum = Number(minute || "0");
-        if (mNum < curM_TN) setMinute(String(curM_TN).padStart(2, "0"));
-      }
+      let newHour = hNum;
+      let newMinute = Number(minute || "0");
+
+      if (hNum > curH_TN) newHour = curH_TN;
+      if (newHour === curH_TN && newMinute > curM_TN) newMinute = curM_TN;
+
+      if (newHour !== hNum) setHour(String(newHour).padStart(2, "0"));
+      if (newMinute !== Number(minute || "0")) setMinute(String(newMinute).padStart(2, "0"));
     }
   };
+
   const onChangeHour = (v: string) => {
     const h = v.slice(0, 2);
-    if (isTodayTN && Number(h) < curH_TN) {
+    // Aujourd’hui : ⛔ pas d’heure > maintenant
+    if (isTodayTN && Number(h) > curH_TN) {
       setHour(String(curH_TN).padStart(2, "0"));
-      if (Number(minute || "0") < curM_TN) setMinute(String(curM_TN).padStart(2, "0"));
+      // si on rabat à l’heure courante et minutes futures -> les ramener aussi
+      if (Number(minute || "0") > curM_TN) setMinute(String(curM_TN).padStart(2, "0"));
       return;
     }
     setHour(h);
-    if (isTodayTN && Number(h) === curH_TN) {
-      const mNum = Number(minute || "0");
-      if (mNum < curM_TN) setMinute(String(curM_TN).padStart(2, "0"));
+    // si aujourd’hui et même heure que maintenant : minutes ≤ maintenant
+    if (isTodayTN && Number(h) === curH_TN && Number(minute || "0") > curM_TN) {
+      setMinute(String(curM_TN).padStart(2, "0"));
     }
   };
+
   const onChangeMinute = (v: string) => {
-    const clean = v.replace(/[^\d]/g, "").slice(0, 2);
-    if (isTodayTN && Number(hour) === curH_TN) {
-      const mm = Math.max(curM_TN, Number(clean || "0"));
-      setMinute(String(mm).padStart(2, "0"));
-    } else {
-      setMinute(clean);
+    // borne 0..59
+    const raw = v.replace(/[^\d]/g, "").slice(0, 2);
+    let mm = Number(raw || "0");
+    if (isNaN(mm)) mm = 0;
+    if (mm > 59) mm = 59;
+
+    // Aujourd’hui & même heure que maintenant : minutes ≤ maintenant
+    if (isTodayTN && Number(hour) === curH_TN && mm > curM_TN) {
+      mm = curM_TN;
     }
+    setMinute(String(mm).padStart(2, "0"));
   };
 
   // Sauvegarde
@@ -274,6 +293,7 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
               type="date"
               value={date}
               onChange={(e) => onChangeDate(e.target.value)}
+              max={todayTN} // ⛔ pas de date future
               className="w-full border rounded px-3 py-2"
             />
           </div>
