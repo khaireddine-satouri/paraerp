@@ -60,7 +60,10 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
     seance.duree_minutes != null ? String(seance.duree_minutes) : ""
   );
   const [prestataireId, setPrestataireId] = useState<string>(seance.prestataire_id || "");
-  const [montantPaye, setMontantPaye] = useState<string>(String(seance.montant_paye ?? 0));
+  // ✅ montant obligatoire : init = '' si NULL, sinon la valeur existante
+  const [montantPaye, setMontantPaye] = useState<string>(
+    seance.montant_paye != null ? String(seance.montant_paye) : ""
+  );
   const [note, setNote] = useState<string>(seance.note || "");
 
   const [prestataires, setPrestataires] = useState<UserBase[]>([]);
@@ -146,19 +149,25 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
     return Number.isFinite(m) && m >= 0 && m <= 59;
   })();
 
-  const canSave = !isFuture && minuteValid && !violatesPrev && !violatesNext;
+  // ✅ Montant obligatoire (non vide, nombre >= 0)
+  const montantValid = (() => {
+    const v = (montantPaye ?? "").toString().trim();
+    if (v === "") return false;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0;
+  })();
+
+  const canSave = !isFuture && minuteValid && montantValid && !violatesPrev && !violatesNext;
 
   /* ----------------- Handlers (clamp vers le PASSÉ uniquement) -----------------
-     Ancien bug : l’UI forçait l’horaire minimum à “maintenant” pour aujourd’hui,
-     empêchant de choisir un horaire passé.
-     Nouveau comportement : on autorise tout horaire passé, on BLOQUE seulement le futur.
+     On autorise le passé (aujourd’hui inclus), on bloque le futur.
   -------------------------------------------------------------------------------*/
   const onChangeDate = (v: string) => {
     // ⛔ pas de jour futur
     const next = v > todayTN ? todayTN : v;
     setDate(next);
 
-    // si la nouvelle date est aujourd’hui et que l’horaire saisi est futur -> on rabat au max = maintenant
+    // si la nouvelle date est aujourd’hui et que l’horaire saisi est futur -> on rabat à maintenant
     if (next === todayTN) {
       const hNum = Number(hour || "0");
       let newHour = hNum;
@@ -177,7 +186,7 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
     // Aujourd’hui : ⛔ pas d’heure > maintenant
     if (isTodayTN && Number(h) > curH_TN) {
       setHour(String(curH_TN).padStart(2, "0"));
-      // si on rabat à l’heure courante et minutes futures -> les ramener aussi
+      // minutes futures → ramenées aussi
       if (Number(minute || "0") > curM_TN) setMinute(String(curM_TN).padStart(2, "0"));
       return;
     }
@@ -206,6 +215,15 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
   const handleSave = async () => {
     setErr("");
     if (!canSave) return;
+
+    // ✅ validation stricte du montant
+    const v = (montantPaye ?? "").toString().trim();
+    const amount = Number(v);
+    if (v === "" || !Number.isFinite(amount) || amount < 0) {
+      setErr("Le montant payé est obligatoire et doit être ≥ 0.");
+      return;
+    }
+
     setSaving(true);
     try {
       const dureeNum = duree === "" ? null : Number(duree);
@@ -222,7 +240,8 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
           heure_seance: `${(hour || "08").slice(0, 2)}:${(minute || "00").padStart(2, "0")}:00`,
           duree_minutes: dureeNum,
           prestataire_id: prestataireId || null,
-          montant_paye: parseFloat(montantPaye) || 0,
+          // ⛔ plus de défaut à 0
+          montant_paye: amount,
           note: note || null,
           etat_seance: "réalisée", // s'assurer qu'elle reste réalisée
         })
@@ -382,16 +401,23 @@ export default function EditSeanceModal({ seance, onClose, onSuccess }: Props) {
           </div>
         )}
 
-        {/* Montant payé & note */}
+        {/* Montant payé (OBLIGATOIRE) & note */}
         <div>
-          <label className="block text-sm text-gray-700 mb-1">Montant payé (DT)</label>
+          <label className="block text-sm text-gray-700 mb-1">Montant payé (DT) *</label>
           <input
             type="number"
+            inputMode="decimal"
             step="0.01"
+            min={0}
+            required
             value={montantPaye}
             onChange={(e) => setMontantPaye(e.target.value)}
-            className="w-full border rounded px-3 py-2"
+            placeholder="ex: 40.00"
+            className={`w-full border rounded px-3 py-2 ${montantValid ? "" : "border-red-300"}`}
           />
+          {!montantValid && (
+            <p className="text-xs text-red-600 mt-1">Le montant est obligatoire (≥ 0).</p>
+          )}
         </div>
 
         <div>
