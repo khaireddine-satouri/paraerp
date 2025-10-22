@@ -13,6 +13,7 @@ import {
   User,
   Camera,
   Upload,
+  Phone,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -26,7 +27,6 @@ export default function PatientDetail({ patient, onBack, onSelectDossier }: Pati
   const { userBase } = useAuth();
   const isAdmin = userBase?.type_utilisateur === 'admin';
   const canDeletePhoto = ['admin', 'assistant'].includes(userBase?.type_utilisateur ?? '');
-
 
   const [dossiers, setDossiers] = useState<DossierSoin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,6 +154,8 @@ export default function PatientDetail({ patient, onBack, onSelectDossier }: Pati
     }
   };
 
+  const tel2 = (patient as any).telephone_2 as string | null | undefined;
+
   return (
     <div className="space-y-6">
       <button
@@ -191,8 +193,21 @@ export default function PatientDetail({ patient, onBack, onSelectDossier }: Pati
             <h2 className="text-2xl font-bold text-gray-900">
               {patient.prenom} {patient.nom}
             </h2>
-            <p className="text-gray-600 mt-1">{patient.telephone}</p>
+
+            <div className="mt-2 space-y-1 text-gray-700">
+              <div className="flex items-center gap-2">
+                <Phone className="w-4 h-4" />
+                <span>{patient.telephone}</span>
+              </div>
+              {tel2 ? (
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Phone className="w-4 h-4 opacity-70" />
+                  <span>{tel2}</span>
+                </div>
+              ) : null}
+            </div>
           </div>
+
           <div className="flex gap-2">
             <button
               onClick={() => setShowEditModal(true)}
@@ -346,6 +361,7 @@ function EditPatientModal({ patient, clientId, onClose, onSuccess }: EditPatient
   const [nom, setNom] = useState(patient.nom);
   const [prenom, setPrenom] = useState(patient.prenom);
   const [telephone, setTelephone] = useState(patient.telephone);
+  const [telephone2, setTelephone2] = useState<string>((patient as any).telephone_2 ?? ''); // NEW
 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -454,78 +470,78 @@ function EditPatientModal({ patient, clientId, onClose, onSuccess }: EditPatient
     }
   };
 
-const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setError('');
-  setLoading(true);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
 
-  try {
-    let newPhotoPath: string | null = (patient as any).photo_path || null;
+    try {
+      let newPhotoPath: string | null = (patient as any).photo_path || null;
 
-    // Only do storage work if a new file was selected
-    if (photoFile) {
-      const ext = (photoFile.name.split('.').pop() || 'jpg').toLowerCase();
-      const filename = `${crypto.randomUUID()}.${ext}`;
-      const folder = `${clientId}/${patient.id}`;
-      const storagePath = `${folder}/${filename}`;
+      // Only do storage work if a new file was selected
+      if (photoFile) {
+        const ext = (photoFile.name.split('.').pop() || 'jpg').toLowerCase();
+        const filename = `${crypto.randomUUID()}.${ext}`;
+        const folder = `${clientId}/${patient.id}`;
+        const storagePath = `${folder}/${filename}`;
 
-      // 1) Upload the new photo
-      const { error: uploadError } = await supabase.storage
-        .from('patient_photos')
-        .upload(storagePath, photoFile, {
-          contentType: photoFile.type || 'application/octet-stream',
-          upsert: false,
-          cacheControl: '3600',
-        });
-      if (uploadError) throw uploadError;
+        // 1) Upload the new photo
+        const { error: uploadError } = await supabase.storage
+          .from('patient_photos')
+          .upload(storagePath, photoFile, {
+            contentType: photoFile.type || 'application/octet-stream',
+            upsert: false,
+            cacheControl: '3600',
+          });
+        if (uploadError) throw uploadError;
 
-      newPhotoPath = storagePath;
+        newPhotoPath = storagePath;
 
-      // 2) Cleanup: list all files in the patient's folder and delete everything except the new one
-      const { data: files, error: listErr } = await supabase.storage
-        .from('patient_photos')
-        .list(folder, { limit: 1000 });
-      if (listErr) {
-        // Not fatal for UX; log and continue
-        console.warn('List old patient photos failed:', listErr);
-      } else {
-        const pathsToRemove =
-          (files || [])
-            .map(f => `${folder}/${f.name}`)
-            .filter(p => p !== newPhotoPath);
+        // 2) Cleanup: list all files in the patient's folder and delete everything except the new one
+        const { data: files, error: listErr } = await supabase.storage
+          .from('patient_photos')
+          .list(folder, { limit: 1000 });
+        if (listErr) {
+          // Not fatal for UX; log and continue
+          console.warn('List old patient photos failed:', listErr);
+        } else {
+          const pathsToRemove =
+            (files || [])
+              .map(f => `${folder}/${f.name}`)
+              .filter(p => p !== newPhotoPath);
 
-        if (pathsToRemove.length > 0) {
-          const { error: rmErr } = await supabase.storage
-            .from('patient_photos')
-            .remove(pathsToRemove);
-          if (rmErr) {
-            console.warn('Removing old patient photos failed:', rmErr);
+          if (pathsToRemove.length > 0) {
+            const { error: rmErr } = await supabase.storage
+              .from('patient_photos')
+              .remove(pathsToRemove);
+            if (rmErr) {
+              console.warn('Removing old patient photos failed:', rmErr);
+            }
           }
         }
       }
+
+      // 3) Update DB (inclut téléphone_2)
+      const { error: updateError } = await supabase
+        .from('patients')
+        .update({
+          nom: nom.trim(),
+          prenom: prenom.trim(),
+          telephone: telephone.trim(),
+          telephone_2: telephone2.trim() || null, // NEW
+          photo_path: newPhotoPath,
+        })
+        .eq('id', patient.id);
+      if (updateError) throw updateError;
+
+      // 4) Instant UI update in parent
+      onSuccess(newPhotoPath ?? null);
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors de la modification du patient');
+    } finally {
+      setLoading(false);
     }
-
-    // 3) Update DB with the (possibly new) path
-    const { error: updateError } = await supabase
-      .from('patients')
-      .update({
-        nom: nom.trim(),
-        prenom: prenom.trim(),
-        telephone: telephone.trim(),
-        photo_path: newPhotoPath,
-      })
-      .eq('id', patient.id);
-    if (updateError) throw updateError;
-
-    // 4) Instant UI update in parent
-    onSuccess(newPhotoPath ?? null);
-  } catch (err: any) {
-    setError(err.message || 'Erreur lors de la modification du patient');
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -635,6 +651,17 @@ const handleSubmit = async (e: React.FormEvent) => {
               onChange={(e) => setTelephone(e.target.value)}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Téléphone 2 (optionnel)</label>
+            <input
+              type="tel"
+              value={telephone2}
+              onChange={(e) => setTelephone2(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
+              placeholder="Ex : 22 333 444"
             />
           </div>
 
@@ -809,22 +836,19 @@ function AddDossierModal({ patientId, clientId, onClose, onSuccess }: AddDossier
   // Handlers dates avec recadrage automatique
   const handleDateDebutChange = (v: string) => {
     setDateDebut(v);
-    // Si fin existe et est avant le début choisi → recale fin = début
     if (v && dateFin && v > dateFin) {
       setDateFin(v);
     }
   };
   const handleDateFinChange = (v: string) => {
     setDateFin(v);
-    // Si début existe et est après la fin choisie → recale début = fin
     if (v && dateDebut && dateDebut > v) {
       setDateDebut(v);
     }
   };
 
-  // bornes dynamiques des inputs
-  const minEndDate = dateDebut || undefined; // fin ne peut pas être < début
-  const maxStartDate = dateFin || undefined; // début ne peut pas être > fin
+  const minEndDate = dateDebut || undefined;
+  const maxStartDate = dateFin || undefined;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -832,11 +856,9 @@ function AddDossierModal({ patientId, clientId, onClose, onSuccess }: AddDossier
     setLoading(true);
 
     try {
-      // Sécurité: clamp côté JS avant envoi
       const ns = Math.max(0, Number.parseInt(nombreSeances || '0', 10) || 0);
       const prix = Math.max(0, Number.parseFloat(prixParSeance || '0') || 0);
 
-      // Garde-fou date (au cas où l'utilisateur contourne l'UI)
       if (dateDebut && dateFin && dateFin < dateDebut) {
         throw new Error('La date de fin ne peut pas être antérieure à la date de début.');
       }
@@ -958,14 +980,9 @@ function AddDossierModal({ patientId, clientId, onClose, onSuccess }: AddDossier
                 type="date"
                 value={dateDebut}
                 onChange={(e) => handleDateDebutChange(e.target.value)}
-                max={maxStartDate}  // ⛔ début > fin
+                max={maxStartDate}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               />
-              {dateFin && dateDebut && dateDebut > dateFin && (
-                <p className="mt-1 text-xs text-red-600">
-                  La date de début ne peut pas être postérieure à la date de fin.
-                </p>
-              )}
             </div>
 
             <div>
@@ -974,14 +991,9 @@ function AddDossierModal({ patientId, clientId, onClose, onSuccess }: AddDossier
                 type="date"
                 value={dateFin}
                 onChange={(e) => handleDateFinChange(e.target.value)}
-                min={minEndDate}    // ⛔ fin < début
+                min={minEndDate}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               />
-              {dateDebut && dateFin && dateFin < dateDebut && (
-                <p className="mt-1 text-xs text-red-600">
-                  La date de fin ne peut pas être antérieure à la date de début.
-                </p>
-              )}
             </div>
           </div>
 
