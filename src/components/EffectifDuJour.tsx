@@ -1,4 +1,3 @@
-// src/components/EffectifDuJour.tsx
 import { useState, useEffect, useMemo } from 'react';
 import {
   Eye,
@@ -457,7 +456,10 @@ function SeanceCard({
   const canOpen = Boolean(seance.dossier && seance.patient);
 
   const isProgrammee = seance.etat_seance === ('programmée' as EtatSeance);
-  const canConvertToReal = isProgrammee && (isToday || isPast);
+
+  // ✅ Assistants : conversion autorisée uniquement le jour même
+  // ✅ Admins : conversion autorisée le jour même + jours passés
+  const canConvertToReal = isProgrammee && (isAdmin ? (isToday || isPast) : isToday);
 
   const timeLabel = seance.heure_seance ? String(seance.heure_seance).slice(0, 5) : null;
 
@@ -629,7 +631,7 @@ function PatientThumb({ patient, size = 48 }: { patient: Patient | null; size?: 
 /* -------------------------------------------------------
    Modal d’AJOUT de séance (réalisée) — bornes vs dernière réalisée
    + RÈGLE ajoutée : blocage si des séances programmées existent pour le dossier choisi
-   (conversion programmée → réalisée NON bloquée)
+   (conversion programmée → réalisée NON bloquée pour admin, et pour assistants seulement le jour même)
 ------------------------------------------------------- */
 function AddSeanceModal({
   date,
@@ -688,7 +690,7 @@ function AddSeanceModal({
   const [users, setUsers] = useState<UserBase[]>([]);
   const [selectedPrestataire, setSelectedPrestataire] = useState(user?.id || "");
   const [montantPaye, setMontantPaye] = useState(
-    scheduledSeance ? String(scheduledSeance.montant_paye ?? 0) : "0"
+    scheduledSeance ? String((scheduledSeance as any).montant_paye ?? 0) : "0"
   );
   const [note, setNote] = useState(scheduledSeance?.note || "");
 
@@ -828,8 +830,14 @@ function AddSeanceModal({
   const dateBeforeLast = !!lastRealDate && date < lastRealDate;
 
   const handleSubmit = async () => {
+    // ⚠️ Conversion d’une "programmée" en "réalisée"
     if (scheduledSeance) {
-      // Conversion d’une "programmée" en "réalisée" (on garde date/heure telles quelles)
+      // ✅ Règle demandée : assistant interdit sur un jour passé
+      if (!isAdmin && date < today) {
+        alert("Action non autorisée : un assistant ne peut pas enregistrer la réalisation d’une séance programmée d’un jour passé.");
+        return;
+      }
+
       setLoading(true);
       try {
         const { error: updErr } = await supabase
@@ -851,6 +859,7 @@ function AddSeanceModal({
       return;
     }
 
+    // ➜ Ajout direct d’une nouvelle réalisée
     if (!selectedDossier) {
       alert("Sélectionnez un dossier.");
       return;
@@ -945,6 +954,8 @@ function AddSeanceModal({
     }
   };
 
+  const assistantPastBlocked = !isAdmin && !!scheduledSeance && date < today;
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-xl max-w-2xl w-full max-h[90vh] max-h-[90vh] overflow-y-auto p-6 space-y-4">
@@ -968,6 +979,13 @@ function AddSeanceModal({
             </span>
           )}
         </div>
+
+        {/* 🔒 Message de blocage assistant sur jour passé en conversion */}
+        {assistantPastBlocked && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded text-sm">
+            Les assistants ne peuvent pas enregistrer la réalisation d’une séance programmée pour un jour passé.
+          </div>
+        )}
 
         {/* Alerte: séances programmées à traiter (affichée seulement en AJOUT, pas en conversion) */}
         {!scheduledSeance && selectedDossier && scheduledCount > 0 && (
@@ -1170,7 +1188,8 @@ function AddSeanceModal({
               loading ||
               (!!lastRealDate && date < lastRealDate) ||
               (sameDayAsLast && minuteTooSmallOrEqual) ||
-              (!scheduledSeance && selectedDossier && scheduledCount > 0) // ⛔ blocage si programmées en attente
+              (!scheduledSeance && selectedDossier && scheduledCount > 0) || // ⛔ blocage si programmées en attente
+              (!!scheduledSeance && !isAdmin && date < today) // ⛔ assistants bloqués en conversion sur jour passé
             }
             className="w-full px-4 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition disabled:opacity-50"
           >
