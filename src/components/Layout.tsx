@@ -12,7 +12,7 @@ interface LayoutProps {
 }
 
 export default function Layout({ children, currentView, onNavigate }: LayoutProps) {
-  const { userBase, signOut } = useAuth();
+  const { userBase } = useAuth(); // ⬅️ on n'utilise plus signOut() du contexte pour éviter le 403 côté mobile
   const [signingOut, setSigningOut] = useState(false);
 
   const isAdmin = userBase?.type_utilisateur === 'admin';
@@ -24,7 +24,7 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
   const [hasAssistants, setHasAssistants] = useState<boolean | null>(null);
 
   // --- Compteur de nouveaux tickets pour l'admin (du jour) ---
-  const { count: newTicketsCount, markAsSeen, refresh } = useNewTicketsIndicator(clientId, isAdmin);
+  const { count: newTicketsCount, markAsSeen } = useNewTicketsIndicator(clientId, isAdmin);
   const showTicketsUI = isAdmin && hasAssistants === true;
 
   useEffect(() => {
@@ -78,15 +78,28 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
     }
   }, [showTicketsUI, currentView, markAsSeen]);
 
-  const handleSignOut = async () => {
+  const handleSignOut = async (e?: React.MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
     if (signingOut) return;
     setSigningOut(true);
     try {
-      await signOut();
-      if (typeof window !== 'undefined') window.location.reload();
+      // ✅ Déconnexion locale fiable (ne dépend pas du token côté serveur)
+      await supabase.auth.signOut({ scope: 'local' });
+
+      // ✅ Best-effort côté serveur : on tente, on ignore si 403 (cas mobile)
+      try {
+        await supabase.auth.signOut({ scope: 'global' });
+      } catch (err) {
+        // Ne pas bloquer l'UX si 403/Forbidden (token expiré ou non transmis)
+        // console.warn('signOut global ignoré:', err);
+      }
+
+      // ❌ pas de reload – l’AuthContext doit écouter SIGNED_OUT et rediriger vers la page de login
+      // Si votre app ne redirige pas automatiquement, dé-commentez :
+      // if (typeof window !== 'undefined') window.location.assign('/');
     } catch (e) {
-      console.error('Erreur déconnexion:', e);
-      if (typeof window !== 'undefined') window.location.reload();
+      console.error('Erreur déconnexion (local):', e);
     } finally {
       setSigningOut(false);
     }
@@ -94,7 +107,6 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
 
   const goTicketsAdmin = async () => {
     if (!showTicketsUI) return;
-    // on purge le compteur puis on navigue
     await markAsSeen();
     onNavigate('tickets_admin');
   };
@@ -139,7 +151,13 @@ export default function Layout({ children, currentView, onNavigate }: LayoutProp
                 type="button"
                 onClick={handleSignOut}
                 aria-label="Déconnexion"
-                className="p-3 sm:p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition active:scale-[0.98] touch-manipulation"
+                aria-busy={signingOut}
+                disabled={signingOut}
+                className={`p-3 sm:p-2 rounded-lg transition active:scale-[0.98] touch-manipulation ${
+                  signingOut
+                    ? 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                }`}
                 title="Déconnexion"
               >
                 <LogOut className="w-6 h-6 sm:w-5 sm:h-5" />
