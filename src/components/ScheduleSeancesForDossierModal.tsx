@@ -702,7 +702,7 @@ function RowEditor({
         />
         {minHHMM && (
           <p className="text-xs text-gray-600 mt-1">
-            Pour ce jour, l’horaire doit être <b>strictement</b> &gt; {minHHMM}.
+            Pour ce jour, l’horaire doit être &ge; {minHHMM}.
           </p>
         )}
       </div>
