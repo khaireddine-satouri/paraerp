@@ -485,22 +485,44 @@ export default function AdminAnalytics({
 
   // Tableau par prestataire (réalisées uniquement) + Total (DT)
   autoTable(doc, {
-    startY: y + cardH + 10,
-    head: [['Prestataire', 'Séances réalisées', 'Total (DT)']],
-    body:
-      periodKPIs.parPrestataire.length > 0
-        ? periodKPIs.parPrestataire.map((p) => [
-            p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—',
-            String(p.totalSeances),
-            (p.encaissement ?? 0).toFixed(2),
-          ])
-        : [['—', '0', '0.00']],
-    styles: { font: 'helvetica', fontSize: 10, cellPadding: 6 },
-    headStyles: { fillColor: [20, 115, 108], textColor: 255, halign: 'left' },
-    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
-    theme: 'grid',
-    margin: { left: 36, right: 36 },
-  });
+  startY: y + cardH + 10,
+  head: [['Prestataire', 'Séances réalisées', 'Total (DT)']],
+  body:
+    periodKPIs.parPrestataire.length > 0
+      ? periodKPIs.parPrestataire.map((p) => [
+          p.prenom || p.nom ? `${p.prenom} ${p.nom}`.trim() : '—',
+          String(p.totalSeances),
+          (p.encaissement ?? 0).toFixed(2),
+        ])
+      : [['—', '0', '0.00']],
+
+  // ✅ styles généraux (lignes grises)
+  styles: {
+    font: 'helvetica',
+    fontSize: 10,
+    cellPadding: 6,
+    lineColor: [210, 215, 220],   // gris clair
+    lineWidth: 0.5,               // épaisseur des bordures
+  },
+
+  // ✅ header : fond vert + bordures grises bien visibles
+  headStyles: {
+    fillColor: [20, 115, 108],    // ton vert
+    textColor: 255,
+    halign: 'left',
+    lineColor: [190, 195, 200],   // gris un poil plus foncé pour l’en-tête
+    lineWidth: 0.75,              // bordures header un peu plus épaisses
+  },
+
+  columnStyles: {
+    1: { halign: 'right' },
+    2: { halign: 'right' },
+  },
+
+  theme: 'grid',
+  margin: { left: 36, right: 36 },
+});
+
 
   // Pied de page
   doc.setFont('helvetica', 'normal');
