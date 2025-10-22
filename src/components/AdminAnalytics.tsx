@@ -486,7 +486,7 @@ export default function AdminAnalytics({
   // Tableau par prestataire (réalisées uniquement) + Total (DT)
   autoTable(doc, {
     startY: y + cardH + 10,
-    head: [['Prestataire', 'Séances', 'Total (DT)']],
+    head: [['Prestataire', 'Séances réalisées', 'Total (DT)']],
     body:
       periodKPIs.parPrestataire.length > 0
         ? periodKPIs.parPrestataire.map((p) => [
