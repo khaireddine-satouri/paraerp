@@ -71,7 +71,7 @@ export default function PatientsList({ onSelectPatient }: PatientsListProps) {
       setLoading(true);
       const { data, error } = await supabase
         .from('patients')
-        .select('id, nom, prenom, telephone, photo_path, client_id, created_at')
+        .select('id, nom, prenom, telephone, telephone_2, photo_path, client_id, created_at')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
