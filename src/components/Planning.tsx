@@ -718,26 +718,39 @@ export default function Planning({
   <div className="flex flex-col gap-2 sm:gap-3">
     {/* Ligne dates : empilée en mobile, en ligne sur ≥ sm */}
     <div className="w-full space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
-      <input
-        type="date"
-        min={todayStr}
-        value={pdfFrom}
-        onChange={(e) => setPdfFrom(e.target.value)}
-        className="w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
-        title="De"
-      />
+      <div className="w-full min-w-0">
+        {/* label mobile seulement */}
+        <label className="block sm:hidden text-xs text-gray-500 mb-1">Début</label>
+        <input
+          type="date"
+          min={todayStr}
+          value={pdfFrom}
+          onChange={(e) => setPdfFrom(e.target.value)}
+          className="w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
+          aria-label="Date de début"
+          title="De"
+        />
+      </div>
+
+      {/* flèche visible seulement en ≥sm */}
       <span className="hidden sm:inline text-gray-500">→</span>
-      <input
-        type="date"
-        min={todayStr}
-        value={pdfTo}
-        onChange={(e) => setPdfTo(e.target.value)}
-        className="w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
-        title="À"
-      />
+
+      <div className="w-full min-w-0">
+        {/* label mobile seulement */}
+        <label className="block sm:hidden text-xs text-gray-500 mb-1">Fin</label>
+        <input
+          type="date"
+          min={todayStr}
+          value={pdfTo}
+          onChange={(e) => setPdfTo(e.target.value)}
+          className="w-full min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
+          aria-label="Date de fin"
+          title="À"
+        />
+      </div>
     </div>
 
-    {/* Ligne boutons : toujours propre en mobile */}
+    {/* Ligne boutons */}
     <div className="flex items-center gap-2">
       <button
         onClick={() => handleExport("pdf")}
