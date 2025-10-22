@@ -11,37 +11,21 @@ type Row = {
   duree?: string; // minutes (string pour input)
 };
 
-function pad2(n: number | string) {
-  return String(n).padStart(2, '0');
-}
-function keyFrom(d: string, hh: string, mm: string) {
-  return `${d}T${pad2(hh)}:${pad2(mm)}:00`;
-}
-function parseKey(k: string) {
-  return new Date(k);
-}
+function pad2(n: number | string) { return String(n).padStart(2, '0'); }
+function keyFrom(d: string, hh: string, mm: string) { return `${d}T${pad2(hh)}:${pad2(mm)}:00`; }
+function parseKey(k: string) { return new Date(k); }
 function addMinutesToHHMM(hhmm: string, plus: number) {
   const [h, m] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
   const d = new Date(2000, 0, 1, h, m, 0);
   d.setMinutes(d.getMinutes() + plus);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
-function fmtKey(d: string, hh: string, mm: string) {
-  return `${d} ${pad2(hh)}:${pad2(mm)}`;
-}
-function labelFromKey(key: string) {
-  return key.replace('T', ' ').slice(0, 16);
-}
+function fmtKey(d: string, hh: string, mm: string) { return `${d} ${pad2(hh)}:${pad2(mm)}`; }
+function labelFromKey(key: string) { return key.replace('T', ' ').slice(0, 16); }
 
 export default function ScheduleSeancesForDossierModal({
-  dossier,
-  onClose,
-  onSuccess,
-}: {
-  dossier: DossierSoin;
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
+  dossier, onClose, onSuccess,
+}: { dossier: DossierSoin; onClose: () => void; onSuccess: () => void; }) {
   const { user, userBase } = useAuth();
   const isAdmin = userBase?.type_utilisateur === 'admin';
 
@@ -55,8 +39,8 @@ export default function ScheduleSeancesForDossierModal({
   const remaining = Math.max(0, totalPrevues - currentCount);
 
   // Bornes
-  const [lastRealDate, setLastRealDate] = useState<string | null>(null);     // YYYY-MM-DD
-  const [lastScheduledKey, setLastScheduledKey] = useState<string | null>(null); // YYYY-MM-DDTHH:MM:00
+  const [lastRealDate, setLastRealDate] = useState<string | null>(null);
+  const [lastScheduledKey, setLastScheduledKey] = useState<string | null>(null);
 
   const now = new Date();
   const todayISO = now.toISOString().split('T')[0];
@@ -64,7 +48,6 @@ export default function ScheduleSeancesForDossierModal({
   const nowMM = pad2(now.getMinutes());
   const nowKey = `${todayISO}T${nowHH}:${nowMM}:00`;
 
-  // minDate = max(today, lastRealDate, date(lastScheduled))
   const minDate = useMemo(() => {
     const lastScheduledDate = lastScheduledKey ? lastScheduledKey.slice(0, 10) : null;
     const candidates = [todayISO, lastRealDate, lastScheduledDate].filter(Boolean) as string[];
@@ -92,10 +75,8 @@ export default function ScheduleSeancesForDossierModal({
     (async () => {
       if (isAdmin) {
         const { data } = await supabase
-          .from('users_base')
-          .select('id, nom, prenom, client_id')
-          .eq('client_id', userBase?.client_id)
-          .order('nom');
+          .from('users_base').select('id, nom, prenom, client_id')
+          .eq('client_id', userBase?.client_id).order('nom');
         setPrestataires((data || []) as UserBase[]);
       }
 
@@ -104,21 +85,15 @@ export default function ScheduleSeancesForDossierModal({
         .select('numero_seance, etat_seance, date_seance, heure_seance')
         .eq('dossier_id', dossier.id);
 
-      const nums = (agg || [])
-        .map((s: any) => s.numero_seance as number)
-        .filter((n) => Number.isFinite(n));
+      const nums = (agg || []).map((s: any) => s.numero_seance as number).filter((n) => Number.isFinite(n));
       setCurrentCount(nums.length);
       setMaxNumero(nums.length > 0 ? Math.max(...nums) : 0);
 
-      // dernière RÉALISÉE (date seule)
       const realDates = (agg || [])
         .filter((s: any) => s.etat_seance === 'réalisée' || s.etat_seance === 'realisee')
-        .map((s: any) => String(s.date_seance))
-        .filter(Boolean)
-        .sort(); // asc
+        .map((s: any) => String(s.date_seance)).filter(Boolean).sort();
       setLastRealDate(realDates.length ? realDates.at(-1)! : null);
 
-      // dernière PROGRAMMÉE (clé complète)
       const lastProg = (agg || [])
         .filter((s: any) => s.etat_seance === 'programmée' || s.etat_seance === 'programmee')
         .sort((a: any, b: any) => {
@@ -129,46 +104,30 @@ export default function ScheduleSeancesForDossierModal({
         .pop();
       setLastScheduledKey(
         lastProg
-          ? `${lastProg.date_seance}T${
-              lastProg.heure_seance ? String(lastProg.heure_seance).slice(0, 5) : '00:00'
-            }:00`
+          ? `${lastProg.date_seance}T${lastProg.heure_seance ? String(lastProg.heure_seance).slice(0, 5) : '00:00'}:00`
           : null
       );
     })();
   }, [dossier.id, isAdmin, userBase?.client_id]);
 
-  // Quand on active la copie, initialiser “Nombre de séances” au restant
-  useEffect(() => {
-    if (copyEnabled) {
-      setCountToSchedule(Math.max(1, remaining));
-    }
-  }, [copyEnabled, remaining]);
+  // init copie
+  useEffect(() => { if (copyEnabled) setCountToSchedule(Math.max(1, remaining)); }, [copyEnabled, remaining]);
 
-  // --------- Calculs de bornes par ligne (min date + min heure/minute) ----------
-  // min date par ligne = max(minDate, date de la ligne précédente)
+  // --------- Bornes par ligne ----------
   const getRowMinDate = (i: number) => {
     if (i === 0) return minDate;
     const prevDate = rows[i - 1]?.date || minDate;
     return prevDate > minDate ? prevDate : minDate;
   };
 
-  // min HH:MM pour la ligne i selon la date saisie
   const getRowMinHHMM = (i: number, date: string): string | null => {
     let base: string | null = null;
-
-    // 1) borne "aujourd'hui" (≥ heure actuelle)
-    if (date === todayISO) {
-      base = `${nowHH}:${nowMM}`;
-    }
-
-    // 2) si i === 0 -> borne "strictement après la dernière programmée (si même jour)"
+    if (date === todayISO) base = `${nowHH}:${nowMM}`;
     if (i === 0 && lastScheduledKey && date === lastScheduledKey.slice(0, 10)) {
       const lastHHMM = lastScheduledKey.slice(11, 16);
-      const plus1 = addMinutesToHHMM(lastHHMM, 1); // strictement après
+      const plus1 = addMinutesToHHMM(lastHHMM, 1);
       base = base ? (plus1 > base ? plus1 : base) : plus1;
     }
-
-    // 3) si i > 0 -> borne "strictement après la ligne précédente (si même jour)"
     if (i > 0) {
       const prev = rows[i - 1];
       if (prev && date === prev.date) {
@@ -177,11 +136,10 @@ export default function ScheduleSeancesForDossierModal({
         base = base ? (plus1 > base ? plus1 : base) : plus1;
       }
     }
-
-    return base; // peut être null
+    return base;
   };
 
-  // --------- Auto-ajustements quand date change ----------
+  // clamp quand bornes changent
   useEffect(() => {
     setRows((prev) =>
       prev.map((r, i) => {
@@ -192,9 +150,7 @@ export default function ScheduleSeancesForDossierModal({
           const [minH, minM] = minHHMM.split(':');
           const curKey = keyFrom(newDate, r.hour, r.minute);
           const minKey = keyFrom(newDate, minH, minM);
-          if (parseKey(curKey) < parseKey(minKey)) {
-            return { ...r, date: newDate, hour: minH, minute: minM };
-          }
+          if (parseKey(curKey) < parseKey(minKey)) return { ...r, date: newDate, hour: minH, minute: minM };
         }
         return { ...r, date: newDate };
       })
@@ -202,18 +158,15 @@ export default function ScheduleSeancesForDossierModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minDate, lastScheduledKey, todayISO, nowHH, nowMM]);
 
-  // --------- Génération des lignes en mode "copie" ----------
+  // génération auto en mode copie
   useEffect(() => {
-    if (!copyEnabled) return;
-    if (remaining <= 0) return;
-
+    if (!copyEnabled || remaining <= 0) return;
     const base = rows[0];
     if (!base?.date) return;
 
     const maxCopies = Math.max(0, remaining - 1);
     const copies = Math.max(0, Math.min(countToSchedule - 1, maxCopies));
 
-    // 1ère ligne: clamp date & hh:mm à leurs bornes
     const firstMinD = getRowMinDate(0);
     const firstDate = base.date < firstMinD ? firstMinD : base.date;
     const minHHMM0 = getRowMinHHMM(0, firstDate);
@@ -223,15 +176,11 @@ export default function ScheduleSeancesForDossierModal({
       const [mh, mm] = minHHMM0.split(':');
       const curKey = keyFrom(firstDate, firstHour, firstMinute);
       const minKey = keyFrom(firstDate, mh, mm);
-      if (parseKey(curKey) < parseKey(minKey)) {
-        firstHour = mh;
-        firstMinute = mm;
-      }
+      if (parseKey(curKey) < parseKey(minKey)) { firstHour = mh; firstMinute = mm; }
     }
 
     const gen: Row[] = [{ date: firstDate, hour: firstHour, minute: firstMinute, duree: base.duree ?? '' }];
 
-    // Copies: strictement après la précédente (même HH:MM, dates espacées de stepDays)
     let last = gen[0];
     let lastDateObj = new Date(gen[0].date);
     for (let i = 0; i < copies; i++) {
@@ -242,37 +191,30 @@ export default function ScheduleSeancesForDossierModal({
       const minD = getRowMinDate(idx);
       const useDate = dStr < minD ? minD : dStr;
       const minHHMM = getRowMinHHMM(idx, useDate);
-      let hh = last.hour;
-      let mm = last.minute;
+      let hh = last.hour, mm = last.minute;
       if (minHHMM) {
         const [mh, mmn] = minHHMM.split(':');
         const curKey = keyFrom(useDate, hh, mm);
         const minKey = keyFrom(useDate, mh, mmn);
-        if (parseKey(curKey) < parseKey(minKey)) {
-          hh = mh;
-          mm = mmn;
-        }
+        if (parseKey(curKey) < parseKey(minKey)) { hh = mh; mm = mmn; }
       }
       const row: Row = { date: useDate, hour: hh, minute: mm, duree: base.duree ?? '' };
       gen.push(row);
       last = row;
       lastDateObj = new Date(useDate);
     }
-
     setRows(gen);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [copyEnabled, countToSchedule, stepDays, minDate, lastScheduledKey, todayISO, nowHH, nowMM]);
 
-  // --------- Utils édition lignes ----------
+  // édition lignes
   const canSchedule =
     (dossier.etat === 'en_cours' || dossier.etat === 'a_venir') &&
-    totalPrevues > 0 &&
-    remaining > 0;
+    totalPrevues > 0 && remaining > 0;
 
   const updateRow = (idx: number, patch: Partial<Row>) => {
     setRows((prev) => {
       const next = prev.map((r, i) => (i === idx ? { ...r, ...patch } : r));
-
       const r = next[idx];
       const minD = getRowMinDate(idx);
       const dateClamped = r.date < minD ? minD : r.date;
@@ -281,14 +223,9 @@ export default function ScheduleSeancesForDossierModal({
         const [mh, mm] = minHHMM.split(':');
         const curKey = keyFrom(dateClamped, r.hour, r.minute);
         const minKey = keyFrom(dateClamped, mh, mm);
-        if (parseKey(curKey) < parseKey(minKey)) {
-          next[idx] = { ...r, date: dateClamped, hour: mh, minute: mm };
-        } else {
-          next[idx] = { ...r, date: dateClamped };
-        }
-      } else {
-        next[idx] = { ...r, date: dateClamped };
-      }
+        if (parseKey(curKey) < parseKey(minKey)) next[idx] = { ...r, date: dateClamped, hour: mh, minute: mm };
+        else next[idx] = { ...r, date: dateClamped };
+      } else next[idx] = { ...r, date: dateClamped };
       return next;
     });
   };
@@ -307,49 +244,37 @@ export default function ScheduleSeancesForDossierModal({
     setRows((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // --------- Validation ----------
+  // validation
   const validate = (): string | null => {
     if (!canSchedule) return "Le dossier doit être 'en_cours' et avoir des séances restantes.";
-
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const seanceNum = maxNumero + 1 + i;
-      const prevNum = seanceNum - 1;
-
+      const seanceNum = maxNumero + 1 + i, prevNum = seanceNum - 1;
       if (!r.date) return `La date de la séance ${seanceNum} est obligatoire.`;
       if (!/^\d{2}$/.test(r.hour || '')) return `L’heure (HH) de la séance ${seanceNum} est invalide.`;
       const mm = (r.minute || '').padStart(2, '0').slice(0, 2);
       const mmNum = Number(mm);
-      if (isNaN(mmNum) || mmNum < 0 || mmNum > 59)
-        return `Les minutes (0–59) de la séance ${seanceNum} sont invalides.`;
-      if (r.duree && Number(r.duree) < 0)
-        return `La durée de la séance ${seanceNum} doit être ≥ 0.`;
+      if (isNaN(mmNum) || mmNum < 0 || mmNum > 59) return `Les minutes (0–59) de la séance ${seanceNum} sont invalides.`;
+      if (r.duree && Number(r.duree) < 0) return `La durée de la séance ${seanceNum} doit être ≥ 0.`;
 
       const hh = (r.hour || '08').slice(0, 2);
       const curKey = keyFrom(r.date, hh, mm);
       const labelCur = fmtKey(r.date, hh, mm);
 
       const minD = getRowMinDate(i);
-      if (r.date < minD) {
+      if (r.date < minD)
         return `La date/heure de la séance ${seanceNum} (${labelCur}) est antérieure au minimum autorisé (${minD} 00:00).`;
-      }
-
-      if (r.date === todayISO && parseKey(curKey) < parseKey(nowKey)) {
+      if (r.date === todayISO && parseKey(curKey) < parseKey(nowKey))
         return `L’horaire de la séance ${seanceNum} (${labelCur}) doit être ≥ l’heure actuelle (${nowHH}:${nowMM}).`;
-      }
-
       if (i > 0) {
         const p = rows[i - 1];
         const pKey = keyFrom(p.date, p.hour, p.minute);
         const pLabel = fmtKey(p.date, p.hour, p.minute);
-        if (!(parseKey(curKey) > parseKey(pKey))) {
+        if (!(parseKey(curKey) > parseKey(pKey)))
           return `L’horaire de la séance ${seanceNum} (${labelCur}) doit être strictement après la séance ${prevNum} (${pLabel}).`;
-        }
       }
-
-      if (i === 0 && lastScheduledKey && !(parseKey(curKey) > parseKey(lastScheduledKey))) {
+      if (i === 0 && lastScheduledKey && !(parseKey(curKey) > parseKey(lastScheduledKey)))
         return `L’horaire de la séance ${seanceNum} (${labelCur}) doit être strictement après la dernière séance programmée (${labelFromKey(lastScheduledKey)}).`;
-      }
     }
     return null;
   };
@@ -357,10 +282,7 @@ export default function ScheduleSeancesForDossierModal({
   const handleSave = async () => {
     setError('');
     const err = validate();
-    if (err) {
-      setError(err);
-      return;
-    }
+    if (err) { setError(err); return; }
 
     const toUse = rows.slice(0, remaining);
     const payload = toUse.map((r, i) => ({
@@ -388,20 +310,15 @@ export default function ScheduleSeancesForDossierModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-    >
-      {/* PANEL */}
+    <div className="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center bg-black/60" role="dialog" aria-modal="true">
+      {/* PANEL : 100% écran en mobile */}
       <div
         className="
           bg-white w-full max-w-3xl
-          h-[100dvh] sm:h-auto
+          h-[100svh] min-h-[100svh] sm:h-auto
           sm:max-h-[85vh]
           sm:rounded-xl
-          flex flex-col
-          overflow-hidden
+          flex flex-col overflow-hidden
         "
       >
         {/* HEADER sticky */}
@@ -420,10 +337,7 @@ export default function ScheduleSeancesForDossierModal({
         </div>
 
         {/* BODY scrollable */}
-        <div
-          className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-5"
-          style={{ WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}
-        >
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-5" style={{ WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}>
           {/* Bandeau infos */}
           <div className="bg-gray-50 rounded-lg p-3 text-sm grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-5 gap-2">
             <span>Séance suivante: <span className="font-medium">{maxNumero + 1}</span></span>
@@ -477,12 +391,7 @@ export default function ScheduleSeancesForDossierModal({
           {/* Mode copie OU saisie manuelle */}
           <div className="border rounded-lg p-3 space-y-3">
             <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={copyEnabled}
-                onChange={(e) => setCopyEnabled(e.target.checked)}
-                className="w-4 h-4"
-              />
+              <input type="checkbox" checked={copyEnabled} onChange={(e) => setCopyEnabled(e.target.checked)} className="w-4 h-4" />
               <span className="text-sm">Copier le même horaire pour les prochaines séances</span>
             </label>
 
@@ -492,32 +401,19 @@ export default function ScheduleSeancesForDossierModal({
                   <div>
                     <label className="block text-sm text-gray-700 mb-1">Nombre de séances</label>
                     <input
-                      type="number"
-                      min={1}
-                      max={Math.max(1, remaining)}
-                      value={countToSchedule}
-                      onChange={(e) => {
-                        const v = Math.max(1, Math.min(Number(e.target.value || 1), Math.max(1, remaining)));
-                        setCountToSchedule(v);
-                      }}
+                      type="number" min={1} max={Math.max(1, remaining)} value={countToSchedule}
+                      onChange={(e) => setCountToSchedule(Math.max(1, Math.min(Number(e.target.value || 1), Math.max(1, remaining))))}
                       className="w-full border rounded px-3 py-2"
                     />
                     <p className="text-xs text-gray-500 mt-1">Inclut la première — max {remaining}.</p>
                   </div>
                   <div>
                     <label className="block text-sm text-gray-700 mb-1">Tous les (jours)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={stepDays}
-                      onChange={(e) => setStepDays(Math.max(1, Number(e.target.value || 1)))}
-                      className="w-full border rounded px-3 py-2"
-                    />
+                    <input type="number" min={1} value={stepDays} onChange={(e) => setStepDays(Math.max(1, Number(e.target.value || 1)))} className="w-full border rounded px-3 py-2" />
                   </div>
                   <div className="flex items-end">
                     <div className="text-sm text-gray-600 inline-flex items-center gap-2 px-2 py-1 bg-gray-100 rounded">
-                      <Copy className="w-4 h-4" />
-                      Aperçu généré automatiquement ci-dessous
+                      <Copy className="w-4 h-4" /> Aperçu généré automatiquement ci-dessous
                     </div>
                   </div>
                 </div>
@@ -532,10 +428,7 @@ export default function ScheduleSeancesForDossierModal({
                         <li key={i} className="flex items-center gap-2">
                           <span className="inline-flex w-6 justify-center font-medium">{maxNumero + 1 + i}</span>
                           <span>{r.date}</span>
-                          <span className="inline-flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {pad2(r.hour)}:{pad2(r.minute)}
-                          </span>
+                          <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{pad2(r.hour)}:{pad2(r.minute)}</span>
                           {r.duree ? <span>• {r.duree} min</span> : null}
                         </li>
                       ))}
@@ -563,28 +456,19 @@ export default function ScheduleSeancesForDossierModal({
                   );
                 })}
                 <button
-                  type="button"
-                  onClick={addRow}
-                  disabled={rows.length >= remaining}
+                  type="button" onClick={addRow} disabled={rows.length >= remaining}
                   className={`mt-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded w-full sm:w-auto ${
-                    rows.length >= remaining
-                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                    rows.length >= remaining ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'
                   }`}
                 >
-                  <Plus className="w-4 h-4" />
-                  Ajouter une séance
+                  <Plus className="w-4 h-4" /> Ajouter une séance
                 </button>
                 <p className="text-xs text-gray-500">Vous pouvez ajouter jusqu’à {remaining} séance(s) au total.</p>
               </div>
             )}
           </div>
 
-          {error && (
-            <div className="text-sm bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2">
-              {error}
-            </div>
-          )}
+          {error && <div className="text-sm bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2">{error}</div>}
         </div>
 
         {/* FOOTER sticky */}
@@ -592,11 +476,8 @@ export default function ScheduleSeancesForDossierModal({
           <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
             <button onClick={onClose} className="px-4 py-2 border rounded w-full sm:w-auto">Annuler</button>
             <button
-              onClick={handleSave}
-              disabled={saving || !canSchedule}
-              className={`px-4 py-2 rounded text-white w-full sm:w-auto ${
-                saving || !canSchedule ? 'bg-gray-300' : 'bg-teal-600 hover:bg-teal-700'
-              }`}
+              onClick={handleSave} disabled={saving || !canSchedule}
+              className={`px-4 py-2 rounded text-white w-full sm:w-auto ${saving || !canSchedule ? 'bg-gray-300' : 'bg-teal-600 hover:bg-teal-700'}`}
             >
               {saving ? 'Enregistrement…' : 'Programmer'}
             </button>
@@ -607,38 +488,20 @@ export default function ScheduleSeancesForDossierModal({
   );
 }
 
-/* -------- RowEditor : responsive, plus d’overlap -------- */
+/* -------- RowEditor : responsive + correctifs desktop -------- */
 function RowEditor({
-  index,
-  numero,
-  row,
-  onChange,
-  hoursOptions,
-  minDate,
-  minHHMM,
-  onRemove,
-  canRemove = true,
+  index, numero, row, onChange, hoursOptions, minDate, minHHMM, onRemove, canRemove = true,
 }: {
-  index: number;
-  numero: number;
-  row: Row;
+  index: number; numero: number; row: Row;
   onChange: (patch: Partial<Row>) => void;
-  hoursOptions: string[];
-  minDate: string;
-  minHHMM: string | null; // "HH:MM" si borne horaire ce jour
-  onRemove?: () => void;
-  canRemove?: boolean;
+  hoursOptions: string[]; minDate: string; minHHMM: string | null;
+  onRemove?: () => void; canRemove?: boolean;
 }) {
-  // auto-clamp minutes si heure = minHH
   useEffect(() => {
     if (!minHHMM) return;
     const [minH, minM] = minHHMM.split(':');
-    if (row.hour === minH && parseInt(row.minute || '0', 10) < parseInt(minM, 10)) {
-      onChange({ minute: minM });
-    }
-    if (parseInt(row.hour || '0', 10) < parseInt(minH, 10)) {
-      onChange({ hour: minH, minute: minM });
-    }
+    if (row.hour === minH && parseInt(row.minute || '0', 10) < parseInt(minM, 10)) onChange({ minute: minM });
+    if (parseInt(row.hour || '0', 10) < parseInt(minH, 10)) onChange({ hour: minH, minute: minM });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minHHMM, row.date]);
 
@@ -648,8 +511,7 @@ function RowEditor({
       const [minH, minM] = minHHMM.split(':');
       if (row.hour === minH) {
         const clamp = Math.max(parseInt(minM, 10), parseInt(clean || '0', 10));
-        onChange({ minute: pad2(isNaN(clamp) ? 0 : clamp) });
-        return;
+        onChange({ minute: pad2(isNaN(clamp) ? 0 : clamp) }); return;
       }
     }
     onChange({ minute: clean });
@@ -658,14 +520,8 @@ function RowEditor({
   const onHourChange = (v: string) => {
     if (minHHMM) {
       const [minH, minM] = minHHMM.split(':');
-      if (parseInt(v, 10) < parseInt(minH, 10)) {
-        onChange({ hour: minH, minute: minM });
-        return;
-      }
-      if (v === minH && parseInt(row.minute || '0', 10) < parseInt(minM, 10)) {
-        onChange({ hour: v, minute: minM });
-        return;
-      }
+      if (parseInt(v, 10) < parseInt(minH, 10)) { onChange({ hour: minH, minute: minM }); return; }
+      if (v === minH && parseInt(row.minute || '0', 10) < parseInt(minM, 10)) { onChange({ hour: v, minute: minM }); return; }
     }
     onChange({ hour: v });
   };
@@ -674,86 +530,54 @@ function RowEditor({
     <div
       className="
         grid gap-3 items-start
-        grid-cols-2 sm:grid-cols-8
+        grid-cols-2 md:grid-cols-9
       "
     >
       {/* Date */}
-      <div className="col-span-2 sm:col-span-3 min-w-0">
+      <div className="col-span-2 md:col-span-3 min-w-0">
         <label className="block text-sm text-gray-700 mb-1">Date</label>
-        <input
-          type="date"
-          value={row.date}
-          min={minDate}
-          onChange={(e) => onChange({ date: e.target.value })}
-          className="w-full border rounded px-3 py-2"
-        />
-        {minHHMM && (
-          <p className="text-xs text-gray-600 mt-1">
-            Pour ce jour, l’horaire doit être <b>strictement</b> &gt; {minHHMM}.
-          </p>
-        )}
+        <input type="date" value={row.date} min={minDate} onChange={(e) => onChange({ date: e.target.value })} className="w-full border rounded px-3 py-2" />
+        {minHHMM && <p className="text-xs text-gray-600 mt-1">Pour ce jour, l’horaire doit être <b>strictement</b> &gt; {minHHMM}.</p>}
       </div>
 
       {/* Heure */}
-      <div className="col-span-1 sm:col-span-1">
+      <div className="col-span-1">
         <label className="block text-sm text-gray-700 mb-1">Heure</label>
-        <select
-          value={row.hour}
-          onChange={(e) => onHourChange(e.target.value)}
-          className="w-full border rounded px-2 py-2 bg-white"
-          title="Heure (HH)"
-        >
+        <select value={row.hour} onChange={(e) => onHourChange(e.target.value)} className="w-full border rounded px-2 py-2 bg-white" title="Heure (HH)">
           {hoursOptions.map((h) => {
-            const disabled =
-              !!minHHMM && parseInt(h, 10) < parseInt(minHHMM.split(':')[0], 10);
-            return (
-              <option key={h} value={h} disabled={disabled}>
-                {h}
-              </option>
-            );
+            const disabled = !!minHHMM && parseInt(h, 10) < parseInt(minHHMM.split(':')[0], 10);
+            return <option key={h} value={h} disabled={disabled}>{h}</option>;
           })}
         </select>
       </div>
 
       {/* Minutes */}
-      <div className="col-span-1 sm:col-span-1">
+      <div className="col-span-1">
         <label className="block text-sm text-gray-700 mb-1">Minutes</label>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={row.minute}
-          onChange={(e) => onMinuteChange(e.target.value)}
-          placeholder="MM"
-          className="w-full border rounded px-2 py-2"
-          title="Minutes (0–59)"
-        />
+        <input type="text" inputMode="numeric" value={row.minute} onChange={(e) => onMinuteChange(e.target.value)} placeholder="MM" className="w-full border rounded px-2 py-2" title="Minutes (0–59)" />
       </div>
 
-      {/* Icône (masquée sur mobile) */}
-      <div className="hidden sm:flex sm:col-span-1 items-end gap-2">
+      {/* Icône (masquée < md) */}
+      <div className="hidden md:flex md:col-span-1 items-end gap-2">
         <Clock className="w-4 h-4 text-gray-400 mb-2" />
       </div>
 
-      {/* Durée */}
-      <div className="col-span-1 sm:col-span-1">
+      {/* Durée : élargie sur desktop */}
+      <div className="col-span-1 md:col-span-2">
         <label className="block text-sm text-gray-700 mb-1">Durée (min)</label>
         <input
-          type="text"
-          inputMode="numeric"
-          value={row.duree ?? ''}
+          type="text" inputMode="numeric" value={row.duree ?? ''}
           onChange={(e) => onChange({ duree: e.target.value.replace(/[^\d]/g, '').slice(0, 4) })}
-          placeholder="ex: 45"
-          className="w-full border rounded px-3 py-2"
+          placeholder="ex: 45" className="w-full border rounded px-3 py-2"
         />
       </div>
 
-      {/* Supprimer */}
-      <div className="col-span-1 sm:col-span-1 flex items-end sm:justify-end">
+      {/* Supprimer : propre colonne, jamais par-dessus */}
+      <div className="col-span-1 flex items-end md:justify-end">
         {canRemove && onRemove && (
           <button
-            type="button"
-            onClick={onRemove}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border hover:bg-gray-50 w-full sm:w-auto"
+            type="button" onClick={onRemove}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border hover:bg-gray-50 w-full md:w-auto"
             title={`Supprimer la séance ${numero}`}
           >
             <Trash2 className="w-4 h-4" />
