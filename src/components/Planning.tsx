@@ -14,53 +14,21 @@ import {
   ChevronRight,
   Clock,
   List,
-  User as UserIcon,
   X,
   Search,
   Eye,
   CheckCircle2,
   SquarePen,
+  Download,
 } from "lucide-react";
+
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 import EditSeanceModal from "./EditSeanceModal";
 import EditScheduledSeanceModal from "./EditScheduledSeanceModal";
 
-/* ------------------ Utils quota ------------------ */
-async function countSeancesForDossier(dossierId: string): Promise<number> {
-  const { data, count, error } = await supabase
-    .from("seances")
-    .select("id", { count: "exact" })
-    .eq("dossier_id", dossierId);
-  if (error) throw error;
-  return (typeof count === "number" ? count : (data?.length ?? 0)) as number;
-}
-async function getDossierWithMax(
-  dossierId: string
-): Promise<Pick<DossierSoin, "id" | "motif" | "nombre_seances">> {
-  const { data, error } = await supabase
-    .from("dossiers_soins")
-    .select("id, motif, nombre_seances")
-    .eq("id", dossierId)
-    .single();
-  if (error) throw error;
-  return data as any;
-}
-async function remainingSlotsForDossier(dossierId: string): Promise<{
-  remaining: number;
-  max: number | null;
-}> {
-  const dossier = await getDossierWithMax(dossierId);
-  const max = dossier?.nombre_seances ?? null;
-  if (!max || max <= 0) return { remaining: Infinity, max: null };
-  const current = await countSeancesForDossier(dossierId);
-  const remaining = Math.max(0, max - current);
-  return { remaining, max };
-}
-
-/** Types d'état (DB avec/ sans accents tolérés) */
-type EtatSeance = "programmée" | "programmee" | "réalisée" | "realisee";
-
-/** Aides temps */
+/* ------------------ Utils communs ------------------ */
 function toDateStr(d: Date) {
   return d.toISOString().split("T")[0];
 }
@@ -101,6 +69,63 @@ function isFutureDateTime(dateISO: string, hh: number, mm: number) {
   if (hh < nowH) return false;
   return mm > nowM;
 }
+function nowInTZ(tz: string) {
+  const parts = new Intl.DateTimeFormat("fr-TN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: tz,
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || "";
+  const yyyy = get("year");
+  const mm = get("month");
+  const dd = get("day");
+  const hh = get("hour");
+  const mi = get("minute");
+  return {
+    dateStr: `${yyyy}-${mm}-${dd}`,
+    hour: Number(hh || "0"),
+    minute: Number(mi || "0"),
+  };
+}
+
+/* ------------------ Utils quota ------------------ */
+async function countSeancesForDossier(dossierId: string): Promise<number> {
+  const { data, count, error } = await supabase
+    .from("seances")
+    .select("id", { count: "exact" })
+    .eq("dossier_id", dossierId);
+  if (error) throw error;
+  return (typeof count === "number" ? count : (data?.length ?? 0)) as number;
+}
+async function getDossierWithMax(
+  dossierId: string
+): Promise<Pick<DossierSoin, "id" | "motif" | "nombre_seances">> {
+  const { data, error } = await supabase
+    .from("dossiers_soins")
+    .select("id, motif, nombre_seances")
+    .eq("id", dossierId)
+    .single();
+  if (error) throw error;
+  return data as any;
+}
+async function remainingSlotsForDossier(dossierId: string): Promise<{
+  remaining: number;
+  max: number | null;
+}> {
+  const dossier = await getDossierWithMax(dossierId);
+  const max = dossier?.nombre_seances ?? null;
+  if (!max || max <= 0) return { remaining: Infinity, max: null };
+  const current = await countSeancesForDossier(dossierId);
+  const remaining = Math.max(0, max - current);
+  return { remaining, max };
+}
+
+/** Types d'état (DB avec/ sans accents tolérés) */
+type EtatSeance = "programmée" | "programmee" | "réalisée" | "realisee";
 
 /** Props pour ouvrir un dossier depuis la planif */
 export default function Planning({
@@ -118,6 +143,9 @@ export default function Planning({
     "programmée"
   );
 
+  // Plage d’affichage (slot) : 60 min (défaut) ou 30 min
+  const [slotMinutes, setSlotMinutes] = useState<30 | 60>(60);
+
   const todayStr = useMemo(() => toDateStr(new Date()), []);
   const [anchorDate, setAnchorDate] = useState<string>(todayStr); // centre de la vue (jour/sem/mois)
 
@@ -127,7 +155,6 @@ export default function Planning({
   const [yearSelect, setYearSelect] = useState<number>(anchor.getFullYear());
 
   useEffect(() => {
-    // Garder sélecteurs en phase quand anchorDate change autrement
     const d = new Date(anchorDate);
     setMonthSelect(d.getMonth());
     setYearSelect(d.getFullYear());
@@ -147,11 +174,13 @@ export default function Planning({
       return { start, end };
     }
     if (mode === "week") {
-      const wd = d.getDay(); // 0 dimanche … 6 samedi
-      const monday = addDays(d, -((wd + 6) % 7));
-      const start = toDateStr(monday);
-      const end = toDateStr(addDays(monday, 7));
-      return { start, end };
+      const wd = d.getDay(); // 0 dim … 6 sam
+      theMonday: {
+        const monday = addDays(d, -((wd + 6) % 7));
+        const start = toDateStr(monday);
+        const end = toDateStr(addDays(monday, 7));
+        return { start, end };
+      }
     }
     // month
     const first = new Date(d.getFullYear(), d.getMonth(), 1);
@@ -159,8 +188,20 @@ export default function Planning({
     return { start: toDateStr(first), end: toDateStr(nextMonth) };
   }, [anchorDate, mode]);
 
-  // Heures 08..20
-  const hours = useMemo(() => Array.from({ length: 13 }, (_, i) => 8 + i), []);
+  // Création des slots (8:00 → 21:00 exclusive)
+  type Slot = { hour: number; minute: number };
+  const slots: Slot[] = useMemo(() => {
+    const res: Slot[] = [];
+    for (let h = 8; h < 21; h++) {
+      if (slotMinutes === 60) {
+        res.push({ hour: h, minute: 0 });
+      } else {
+        res.push({ hour: h, minute: 0 });
+        res.push({ hour: h, minute: 30 });
+      }
+    }
+    return res;
+  }, [slotMinutes]);
 
   // Données
   const [rows, setRows] = useState<
@@ -173,11 +214,11 @@ export default function Planning({
   const [loading, setLoading] = useState(true);
 
   // Slot sélectionné (pour la liste & actions)
-  const [slot, setSlot] = useState<{ date: string; hour: number } | null>(
+  const [slot, setSlot] = useState<{ date: string; hour: number; minute: number } | null>(
     null
   );
 
-  // Modales internes (programmer ici / ajouter réalisée ici)
+  // Modales internes
   const [showProgramHere, setShowProgramHere] = useState(false);
   const [showAddRealHere, setShowAddRealHere] = useState(false);
 
@@ -195,6 +236,10 @@ export default function Planning({
       null
     );
 
+  // Export PDF (programmées) — plage
+  const [pdfFrom, setPdfFrom] = useState<string>(todayStr);
+  const [pdfTo, setPdfTo] = useState<string>(todayStr);
+
   // Refresh centralisé + RealTime
   const [reloadNonce, setReloadNonce] = useState(0);
   const refresh = () => setReloadNonce((n) => n + 1);
@@ -206,13 +251,11 @@ export default function Planning({
       try {
         const clientId = userBase.client_id;
 
-        // Filtre etat
         const etatColValues: EtatSeance[] =
           etatFilter === "programmée"
             ? ["programmée", "programmee"]
             : ["réalisée", "realisee"];
 
-        // portée user
         let q = supabase
           .from("seances")
           .select("*")
@@ -324,18 +367,21 @@ export default function Planning({
     };
   }, [startEnd.start, startEnd.end]);
 
-  // Agrégations par date+heure (nombre)
-  const countByDateHour = useMemo(() => {
-    const map = new Map<string, number>();
+  // Agrégations par date+slot
+  const countByDateSlot = useMemo(() => {
+    const m = new Map<string, number>();
     for (const s of rows) {
       const date = s.date_seance;
-      const hh = s.heure_seance ? String(s.heure_seance).slice(0, 2) : "00";
-      const h = parseInt(hh, 10);
-      const k = `${date}|${h}`;
-      map.set(k, (map.get(k) || 0) + 1);
+      const hh = extractHour(s.heure_seance);
+      const mm = extractMinute(s.heure_seance);
+      const mmGroup = slotMinutes === 60 ? 0 : (mm < 30 ? 0 : 30);
+      const key = `${date}|${String(hh).padStart(2, "0")}|${String(
+        mmGroup
+      ).padStart(2, "0")}`;
+      m.set(key, (m.get(key) || 0) + 1);
     }
-    return map;
-  }, [rows]);
+    return m;
+  }, [rows, slotMinutes]);
 
   // Navigation temporelle
   const goPrev = () => {
@@ -364,7 +410,7 @@ export default function Planning({
       const monday = addDays(d, -((wd + 6) % 7));
       return Array.from({ length: 7 }, (_, i) => toDateStr(addDays(monday, i)));
     }
-    // month => grille (6 semaines max)
+    // month => 6 semaines max
     const d = new Date(anchorDate);
     const first = new Date(d.getFullYear(), d.getMonth(), 1);
     const startMonday = addDays(first, -((first.getDay() + 6) % 7));
@@ -394,7 +440,6 @@ export default function Planning({
       )} au ${toDateStrReadable(daysInView[6])}`;
       return `${prefix} — ${rangeTxt}`;
     }
-    // month
     const monthTxt = d.toLocaleDateString("fr-FR", {
       year: "numeric",
       month: "long",
@@ -402,17 +447,22 @@ export default function Planning({
     return `${prefix} — ${monthTxt}`;
   }, [anchorDate, mode, daysInView, etatFilter]);
 
-  // Liste des séances d’un créneau
-  const sessionsOfSlot = (date: string, hour: number) =>
-    rows.filter(
-      (s) => s.date_seance === date && extractHour(s.heure_seance) === hour
-    );
+  // Liste des séances d’un slot
+  const sessionsOfSlot = (date: string, hour: number, minute: number) =>
+    rows.filter((s) => {
+      if (s.date_seance !== date) return false;
+      const hh = extractHour(s.heure_seance);
+      const mm = extractMinute(s.heure_seance);
+      if (slotMinutes === 60) return hh === hour; // ignore minute
+      const start = minute;
+      const end = minute + 29;
+      return hh === hour && mm >= start && mm <= end;
+    });
 
   // Règles clics
-  const canProgramHere = (date: string, _hour: number) => {
-    // ➜ Pour les programmées : tous les horaires du JOUR sont activés (pas d'heuristique heure courante)
-    //    On n'autorise pas de programmation sur des dates passées.
-    return etatFilter === "programmée" && date >= todayStr;
+  const canProgramHere = (date: string) => {
+    // Assistants: interdit; Admin: date >= aujourd’hui
+    return isAdmin && etatFilter === "programmée" && date >= todayStr;
   };
   const canAddRealHere = (date: string, hour: number) => {
     // Réalisées : admin = passé ou aujourd'hui ≤ heure courante ; non-admin = uniquement aujourd’hui ≤ heure courante
@@ -421,7 +471,6 @@ export default function Planning({
     const nowH = now.getHours();
     if (date > t) return false;
     if (date < t) return true; // passé OK
-    // = aujourd’hui
     return hour <= nowH;
   };
 
@@ -433,6 +482,79 @@ export default function Planning({
   const openRealizeFromScheduled = (
     s: Seance & { dossier?: DossierSoin; patient?: Patient }
   ) => setRealizeFromScheduled(s);
+
+  // Export PDF (programmées)
+  const handleExportProgramméesPDF = async () => {
+    if (pdfFrom > pdfTo || pdfFrom < todayStr) {
+      alert("Veuillez choisir une plage valide (à partir d’aujourd’hui).");
+      return;
+    }
+    const { data, error } = await supabase
+      .from("seances")
+      .select("*, users_base(id, nom, prenom), dossiers_soins(id, motif), patients(*)")
+      .in("etat_seance", ["programmée", "programmee"] as any)
+      .gte("date_seance", pdfFrom)
+      .lte("date_seance", pdfTo)
+      .order("date_seance", { ascending: true })
+      .order("heure_seance", { ascending: true });
+    if (error) {
+      alert(error.message || "Erreur lors du chargement des séances.");
+      return;
+    }
+    const rowsSel = (data || []).filter((s: any) => (isAdmin ? true : s.prestataire_id === user?.id));
+
+    const doc = new jsPDF({ orientation: "landscape" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const title = "Séances programmées";
+    doc.setFontSize(16);
+    doc.text(title, pageWidth / 2, 14, { align: "center" });
+    doc.setFontSize(10);
+    doc.text(
+      `Période: ${new Date(pdfFrom).toLocaleDateString("fr-FR")} → ${new Date(pdfTo).toLocaleDateString("fr-FR")}`,
+      pageWidth / 2,
+      20,
+      { align: "center" }
+    );
+
+    const body = rowsSel.map((s: any) => [
+      new Date(s.date_seance).toLocaleDateString("fr-FR"),
+      s.heure_seance ? String(s.heure_seance).slice(0, 5) : "—",
+      s.patients ? `${s.patients.prenom} ${s.patients.nom}` : "-",
+      s.dossiers_soins ? s.dossiers_soins.motif : "-",
+      s.users_base ? `${s.users_base.prenom} ${s.users_base.nom}` : "-",
+      s.note || "-",
+    ]);
+
+    autoTable(doc, {
+      startY: 26,
+      head: [["Date", "Heure", "Patient", "Motif", "Prestataire", "Note"]],
+      body,
+      theme: "grid",
+      headStyles: { fillColor: [13, 148, 136] },
+      styles: { fontSize: 9 },
+      columnStyles: { 5: { cellWidth: 60 } },
+    });
+
+    // Footer: date de Tunis
+    const tunis = new Intl.DateTimeFormat("fr-FR", {
+      timeZone: "Africa/Tunis",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date());
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(`Téléchargé le ${tunis} (heure de Tunis)`, pageWidth / 2, pageHeight - 6, {
+      align: "center",
+    });
+
+    const fileName = `programmees_${pdfFrom}_au_${pdfTo}.pdf`;
+    doc.save(fileName);
+  };
 
   return (
     <div className="space-y-4">
@@ -446,7 +568,6 @@ export default function Planning({
 
           {/* 2) Navigation temps */}
           <div className="flex flex-col gap-2">
-            {/* ligne nav principale */}
             <div className="flex items-center gap-2">
               <button
                 onClick={goPrev}
@@ -456,7 +577,6 @@ export default function Planning({
                 <ChevronLeft className="w-5 h-5" />
               </button>
 
-              {/* centre : date picker OU mois/année */}
               {mode === "month" ? (
                 <div className="flex w-full gap-2">
                   <select
@@ -464,7 +584,7 @@ export default function Planning({
                     onChange={(e) => {
                       const m = Number(e.target.value);
                       setMonthSelect(m);
-                      onChangeMonthYear(m, yearSelect);
+                      onChangeMonthYear(m, yearSelect, setAnchorDate);
                     }}
                     className="w-full sm:w-auto flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg bg-white"
                     aria-label="Mois"
@@ -483,7 +603,7 @@ export default function Planning({
                     onChange={(e) => {
                       const y = Number(e.target.value);
                       setYearSelect(y);
-                      onChangeMonthYear(monthSelect, y);
+                      onChangeMonthYear(monthSelect, y, setAnchorDate);
                     }}
                     className="w-full sm:w-auto flex-[0.8] min-w-0 px-3 py-2 border border-gray-300 rounded-lg bg-white"
                     aria-label="Année"
@@ -513,43 +633,87 @@ export default function Planning({
               </button>
             </div>
 
-            {/* ligne “Aujourd’hui” séparée */}
-            <div>
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={goToday}
-                className="w-full sm:w-auto px-3 py-2 rounded-lg border text-sm hover:bg-gray-50"
+                className="px-3 py-2 rounded-lg border text-sm hover:bg-gray-50"
                 title="Aller à aujourd’hui"
               >
                 Aujourd’hui
               </button>
-            </div>
-          </div>
 
-          {/* 3) Filtres (vue / état) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-            <div className="flex flex-col">
-              <label className="text-sm text-gray-600 mb-1">Vue</label>
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value as any)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white"
-              >
-                <option value="day">Jour</option>
-                <option value="week">Semaine</option>
-                <option value="month">Mois</option>
-              </select>
-            </div>
+              {/* Vue */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600">Vue</label>
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value as any)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+                >
+                  <option value="day">Jour</option>
+                  <option value="week">Semaine</option>
+                  <option value="month">Mois</option>
+                </select>
+              </div>
 
-            <div className="flex flex-col">
-              <label className="text-sm text-gray-600 mb-1">État</label>
-              <select
-                value={etatFilter}
-                onChange={(e) => setEtatFilter(e.target.value as any)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white"
-              >
-                <option value="programmée">Programmées</option>
-                <option value="réalisée">Réalisées</option>
-              </select>
+              {/* État */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600">État</label>
+                <select
+                  value={etatFilter}
+                  onChange={(e) => setEtatFilter(e.target.value as any)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+                >
+                  <option value="programmée">Programmées</option>
+                  <option value="réalisée">Réalisées</option>
+                </select>
+              </div>
+
+              {/* Plage d’affichage (jour/semaine) */}
+              {mode !== "month" && (
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600">Plage</label>
+                  <select
+                    value={slotMinutes}
+                    onChange={(e) => setSlotMinutes(Number(e.target.value) === 30 ? 30 : 60)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+                  >
+                    <option value={60}>1 h</option>
+                    <option value={30}>30 min</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Export PDF programmées */}
+              {etatFilter === "programmée" && (
+                <div className="flex items-center gap-2 ml-auto">
+                  <input
+                    type="date"
+                    value={pdfFrom}
+                    onChange={(e) => setPdfFrom(e.target.value)}
+                    min={todayStr}
+                    className="px-3 py-2 border border-gray-300 rounded-lg"
+                    title="Début"
+                  />
+                  <span className="text-gray-500">→</span>
+                  <input
+                    type="date"
+                    value={pdfTo}
+                    onChange={(e) => setPdfTo(e.target.value)}
+                    min={pdfFrom}
+                    className="px-3 py-2 border border-gray-300 rounded-lg"
+                    title="Fin"
+                  />
+                  <button
+                    onClick={handleExportProgramméesPDF}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white"
+                    title="Exporter les séances programmées en PDF (paysage)"
+                  >
+                    <Download className="w-4 h-4" />
+                    PDF
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -570,10 +734,11 @@ export default function Planning({
         ) : (
           <TimeGrid
             days={mode === "day" ? [anchorDate] : daysInView}
-            hours={hours}
-            countByDateHour={countByDateHour}
+            slots={slots}
+            slotMinutes={slotMinutes}
+            countByDateSlot={countByDateSlot}
             loading={loading}
-            onClickCell={(date, hour) => setSlot({ date, hour })}
+            onClickCell={(date, hour, minute) => setSlot({ date, hour, minute })}
             today={todayStr}
             etatFilter={etatFilter}
           />
@@ -585,11 +750,12 @@ export default function Planning({
         <SlotDrawer
           date={slot.date}
           hour={slot.hour}
-          items={sessionsOfSlot(slot.date, slot.hour)}
+          minute={slot.minute}
+          items={sessionsOfSlot(slot.date, slot.hour, slot.minute)}
           onClose={() => setSlot(null)}
           onOpenDossier={onOpenDossier}
           etatFilter={etatFilter}
-          canProgramHere={canProgramHere(slot.date, slot.hour)}
+          canProgramHere={canProgramHere(slot.date)}
           canAddRealHere={canAddRealHere(slot.date, slot.hour)}
           onProgram={() => setShowProgramHere(true)}
           onAddReal={() => setShowAddRealHere(true)}
@@ -598,6 +764,7 @@ export default function Planning({
           onRealizeScheduled={openRealizeFromScheduled}
           isAdmin={isAdmin}
           today={todayStr}
+          slotMinutes={slotMinutes}
         />
       )}
 
@@ -606,6 +773,7 @@ export default function Planning({
         <ProgramHereModal
           date={slot.date}
           fixedHour={slot.hour}
+          fixedMinute={slot.minute}
           onClose={() => setShowProgramHere(false)}
           onSuccess={() => {
             setShowProgramHere(false);
@@ -619,6 +787,7 @@ export default function Planning({
         <AddRealHereModal
           date={slot.date}
           fixedHour={slot.hour}
+          fixedMinute={slot.minute}
           isAdmin={isAdmin}
           currentUserId={user?.id || ""}
           onClose={() => setShowAddRealHere(false)}
@@ -654,11 +823,12 @@ export default function Planning({
         />
       )}
 
-      {/* Conversion programmée → réalisée (en conservant la date/heure) */}
+      {/* Conversion programmée → réalisée (en conservant date/heure) */}
       {realizeFromScheduled && (
         <AddRealHereModal
           date={realizeFromScheduled.date_seance}
           fixedHour={extractHour(realizeFromScheduled.heure_seance)}
+          fixedMinute={extractMinute(realizeFromScheduled.heure_seance)}
           scheduledSeance={realizeFromScheduled}
           isAdmin={isAdmin}
           currentUserId={user?.id || ""}
@@ -676,33 +846,47 @@ export default function Planning({
 /* ================== Time grid (Jour/Semaine) ================== */
 function TimeGrid({
   days,
-  hours,
-  countByDateHour,
+  slots,
+  slotMinutes,
+  countByDateSlot,
   onClickCell,
   loading,
   today,
   etatFilter,
 }: {
   days: string[];
-  hours: number[];
-  countByDateHour: Map<string, number>;
-  onClickCell: (date: string, hour: number) => void;
+  slots: { hour: number; minute: number }[];
+  slotMinutes: 30 | 60;
+  countByDateSlot: Map<string, number>;
+  onClickCell: (date: string, hour: number, minute: number) => void;
   loading: boolean;
   today: string;
   etatFilter: "programmée" | "réalisée";
 }) {
+  const labelFor = (h: number, m: number) => {
+    if (slotMinutes === 60) {
+      const nH = h + 1;
+      return `${String(h).padStart(2, "0")}h-${String(nH).padStart(2, "0")}h`;
+    }
+    // 30 min
+    const endH = m === 0 ? h : h + 1;
+    const endM = m === 0 ? "30" : "00";
+    const endLabel = `${String(endH).padStart(2, "0")}h${endM === "00" ? "" : endM}`;
+    return `${String(h).padStart(2, "0")}h${m === 0 ? "" : "30"}-${endLabel}`;
+  };
+
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full table-fixed border-separate border-spacing-0">
         <thead>
           <tr>
-            <th className="sticky left-0 bg-white z-10 text-left p-3 border-b border-gray-200 text-gray-600 w-24">
-              Heure
+            <th className="sticky left-0 bg-white z-10 text-left p-3 border-b border-gray-200 text-gray-600 w-28">
+              Plage
             </th>
             {days.map((d) => (
               <th
                 key={d}
-                className={`text-left p-3 border-b border-gray-200 text-gray-600 min-w-[160px] ${
+                className={`text-left p-3 border-b border-gray-200 text-gray-600 min-w-[180px] ${
                   d === today ? "bg-teal-50" : ""
                 }`}
               >
@@ -716,37 +900,38 @@ function TimeGrid({
         </thead>
 
         <tbody>
-          {hours.map((h, rowIdx) => {
-            const isLast = rowIdx === hours.length - 1;
+          {slots.map(({ hour, minute }, rowIdx) => {
+            const keyLeft = `${hour}:${minute}`;
+            const isLast = rowIdx === slots.length - 1;
             const rowBottom = isLast ? "border-b border-gray-200" : "";
 
             return (
-              <tr key={h}>
-                {/* Colonne Heure */}
+              <tr key={keyLeft}>
+                {/* Colonne Plage */}
                 <td
                   className={`sticky left-0 bg-white z-10 p-3 text-gray-700 font-medium border-r border-gray-200 border-t ${rowBottom}`}
                 >
-                  {`${String(h).padStart(2, "0")}:00`}
+                  {labelFor(hour, minute)}
                 </td>
 
                 {/* Colonnes jours */}
                 {days.map((d) => {
-                  const k = `${d}|${h}`;
-                  const c = countByDateHour.get(k) || 0;
+                  const slotM = slotMinutes === 60 ? 0 : (minute < 30 ? 0 : 30);
+                  const k = `${d}|${String(hour).padStart(2, "0")}|${String(
+                    slotM
+                  ).padStart(2, "0")}`;
+                  const c = countByDateSlot.get(k) || 0;
 
-                  // ➜ Désactivation selon filtre
-                  // Programmées : activer TOUTE la journée courante (pas de grisé par heure),
-                  //                griser seulement les dates strictement passées.
-                  // Réalisées : griser futur (date future, ou plus tard aujourd'hui).
+                  // Désactivation selon filtre
                   const now = new Date();
                   const pastDate = d < today;
                   const future =
-                    d > today || (d === today && h > now.getHours());
+                    d > today || (d === today && hour > now.getHours());
 
                   const disabled =
                     etatFilter === "programmée"
-                      ? pastDate
-                      : future;
+                      ? pastDate // pas de programmation dans le passé
+                      : future;  // pas d’ajout réalisé dans le futur
 
                   return (
                     <td
@@ -755,7 +940,7 @@ function TimeGrid({
                         d === today ? "bg-teal-50/50" : ""
                       } ${disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"}`}
                       onClick={() => {
-                        if (!disabled) onClickCell(d, h);
+                        if (!disabled) onClickCell(d, hour, minute);
                       }}
                       title="Voir le détail du créneau"
                     >
@@ -825,10 +1010,11 @@ function MonthGrid({
   );
 }
 
-/* ================== Slot drawer (liste + action unique) ================== */
+/* ================== Slot drawer (liste + action) ================== */
 function SlotDrawer({
   date,
   hour,
+  minute,
   items,
   onClose,
   onOpenDossier,
@@ -842,9 +1028,11 @@ function SlotDrawer({
   onRealizeScheduled,
   isAdmin,
   today,
+  slotMinutes,
 }: {
   date: string;
   hour: number;
+  minute: number;
   items: (Seance & {
     dossier?: DossierSoin;
     patient?: Patient;
@@ -868,6 +1056,7 @@ function SlotDrawer({
   ) => void;
   isAdmin: boolean;
   today: string;
+  slotMinutes: 30 | 60;
 }) {
   const isProg = etatFilter === "programmée";
   const enabled = isProg ? canProgramHere : canAddRealHere;
@@ -877,13 +1066,21 @@ function SlotDrawer({
     s.etat_seance === ("programmée" as EtatSeance) ||
     s.etat_seance === ("programmee" as EtatSeance);
 
+  const labelFor = (h: number, m: number) => {
+    if (slotMinutes === 60) return `${String(h).padStart(2, "0")}h-${String(h + 1).padStart(2, "0")}h`;
+    const endH = m === 0 ? h : h + 1;
+    const endM = m === 0 ? "30" : "00";
+    const endLabel = `${String(endH).padStart(2, "0")}h${endM === "00" ? "" : endM}`;
+    return `${String(h).padStart(2, "0")}h${m === 0 ? "" : "30"}-${endLabel}`;
+  };
+
   return (
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-xl p-4 sm:p-6 overflow-y-auto">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">
-            {toDateStrReadable(date)} — {String(hour).padStart(2, "0")}:00
+            {toDateStrReadable(date)} — {labelFor(hour, minute)}
           </h3>
           <button onClick={onClose} className="p-2 rounded hover:bg-gray-100">
             <X className="w-5 h-5" />
@@ -923,7 +1120,7 @@ function SlotDrawer({
                   ? String(s.heure_seance).slice(0, 5)
                   : "—";
 
-                // ➜ blocage conversion programmée → réalisée si FUTUR (date/heure/minute)
+                // blocage conversion programmée → réalisée si FUTUR
                 const sHH = extractHour(s.heure_seance);
                 const sMM = extractMinute(s.heure_seance);
                 const isFutureItem = isFutureDateTime(
@@ -974,7 +1171,7 @@ function SlotDrawer({
 
                         {scheduled ? (
                           <>
-                            {/* Enregistrer réalisation (icone ✅) — bloqué si futur */}
+                            {/* Enregistrer réalisation */}
                             <button
                               onClick={() => canRealizeScheduled && onRealizeScheduled(s as any)}
                               disabled={!canRealizeScheduled}
@@ -991,7 +1188,7 @@ function SlotDrawer({
                             >
                               <CheckCircle2 className="w-5 h-5" />
                             </button>
-                            {/* Modifier programmée (icone ✏️) */}
+                            {/* Modifier programmée */}
                             {isAdmin && (
                               <button
                                 onClick={() => onEditScheduled(s as any)}
@@ -1027,15 +1224,17 @@ function SlotDrawer({
   );
 }
 
-/* ================== Programmer ici (heure fixée) — logique borne/quotas ================== */
+/* ================== Programmer ici (heure fixée) — bornes (heure Tunis + dernière programmée) ================== */
 function ProgramHereModal({
   date,
   fixedHour,
+  fixedMinute,
   onClose,
   onSuccess,
 }: {
   date: string;
   fixedHour: number; // 8..20
+  fixedMinute: number; // 0 or 30 (ou 0 si slot 60)
   onClose: () => void;
   onSuccess: () => void;
 }) {
@@ -1050,23 +1249,21 @@ function ProgramHereModal({
   const [prestataires, setPrestataires] = useState<UserBase[]>([]);
   const [prestataireId, setPrestataireId] = useState<string>(user?.id || "");
 
-  const [minute, setMinute] = useState<string>("00");
+  // mm editable pour ajuster précisément le slot
+  const [minute, setMinute] = useState<string>(String(fixedMinute).padStart(2, "0"));
   const [duree, setDuree] = useState<string>("");
 
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  const today = toDateStr(new Date());
-  const [lastRealDate, setLastRealDate] = useState<string | null>(null);
-  const minDate = useMemo(
-    () => (!lastRealDate ? today : lastRealDate > today ? lastRealDate : today),
-    [today, lastRealDate]
-  );
+  // Borne min = max(aujourd’hui Tunis, dernière RÉALISÉE) → déjà géré ailleurs.
+  // Ici: on ajoute la borne **dernière PROGRAMMÉE** + borne **heure actuelle Tunis** si date==aujourd’hui.
+  const [lastProgDate, setLastProgDate] = useState<string | null>(null);
+  const [lastProgTime, setLastProgTime] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      // Patients du client
       const { data: pts } = await supabase
         .from("patients")
         .select("*")
@@ -1091,7 +1288,6 @@ function ProgramHereModal({
         setSelectedDossier(null);
         return;
       }
-      // Dossiers en cours / à venir uniquement
       const { data } = await supabase
         .from("dossiers_soins")
         .select("*")
@@ -1103,25 +1299,24 @@ function ProgramHereModal({
     })();
   }, [selectedPatient, userBase?.client_id]);
 
-  // calcul borne min basée sur dernière RÉALISÉE
+  // charger la DERNIÈRE programmée du dossier (date+heure max)
   useEffect(() => {
     (async () => {
-      setLastRealDate(null);
+      setLastProgDate(null);
+      setLastProgTime(null);
       if (!selectedDossier) return;
       const { data } = await supabase
         .from("seances")
-        .select("etat_seance, date_seance")
-        .eq("dossier_id", selectedDossier.id);
-
-      const realDates = (data || [])
-        .filter(
-          (s: any) =>
-            s.etat_seance === "réalisée" || s.etat_seance === "realisee"
-        )
-        .map((s: any) => s.date_seance as string)
-        .filter(Boolean)
-        .sort();
-      setLastRealDate(realDates.length ? realDates[realDates.length - 1] : null);
+        .select("etat_seance, date_seance, heure_seance")
+        .eq("dossier_id", selectedDossier.id)
+        .in("etat_seance", ["programmée", "programmee"])
+        .order("date_seance", { ascending: false })
+        .order("heure_seance", { ascending: false })
+        .limit(1);
+      if (data && data.length > 0) {
+        setLastProgDate(data[0].date_seance as string);
+        setLastProgTime(data[0].heure_seance ? String(data[0].heure_seance).slice(0, 5) : "00:00");
+      }
     })();
   }, [selectedDossier]);
 
@@ -1161,28 +1356,49 @@ function ProgramHereModal({
   const handleSave = async () => {
     setErr("");
 
-    // borne min (pas de passé / ni < dernière réalisée)
-    if (date < minDate) {
-      setErr(`Impossible de programmer à une date < ${minDate}.`);
-      return;
-    }
-
     if (!selectedDossier) {
-      setErr("Veuillez sélectionner un dossier non clôturé avec des séances restantes à programmer.");
+      setErr("Veuillez sélectionner un dossier non clôturé.");
       return;
     }
 
-    // ➜ CONTRÔLE MAX (avant insert)
+    // minutes
+    const mm = (minute || "00").replace(/[^\d]/g, "").slice(0, 2).padStart(2, "0");
+    const mmNum = Number(mm);
+    if (!Number.isFinite(mmNum) || mmNum < 0 || mmNum > 59) {
+      setErr("Minutes invalides (0–59).");
+      return;
+    }
+
+    // ⏱ Vérif heure actuelle Tunis si date == aujourd’hui (programmation dans le passé interdite)
+    const tunis = nowInTZ("Africa/Tunis");
+    if (date === tunis.dateStr) {
+      if (fixedHour < tunis.hour || (fixedHour === tunis.hour && mmNum < tunis.minute)) {
+        setErr("L’horaire choisi est antérieur à l’heure actuelle (heure de Tunis).");
+        return;
+      }
+    }
+
+    // ⏱ Borne sur la dernière PROGRAMMÉE du dossier
+    if (lastProgDate && lastProgTime) {
+      if (date < lastProgDate) {
+        setErr(`Date invalide : doit être ≥ ${new Date(lastProgDate).toLocaleDateString("fr-FR")}.`);
+        return;
+      }
+      if (date === lastProgDate) {
+        const lastHH = Number(lastProgTime.slice(0, 2));
+        const lastMM = Number(lastProgTime.slice(3, 5));
+        if (fixedHour < lastHH || (fixedHour === lastHH && mmNum <= lastMM)) {
+          setErr(`Horaire invalide : doit être > ${lastProgTime}.`);
+          return;
+        }
+      }
+    }
+
+    // ➜ CONTRÔLE MAX
     try {
-      const { remaining, max } = await remainingSlotsForDossier(
-        selectedDossier.id
-      );
+      const { remaining, max } = await remainingSlotsForDossier(selectedDossier.id);
       if (remaining <= 0) {
-        setErr(
-          max
-            ? `Limite atteinte : ce dossier a déjà ${max} séance(s).`
-            : "Limite atteinte."
-        );
+        setErr(max ? `Limite atteinte : ce dossier a déjà ${max} séance(s).` : "Limite atteinte.");
         return;
       }
     } catch (e: any) {
@@ -1190,38 +1406,31 @@ function ProgramHereModal({
       return;
     }
 
-    // minute + durée
-    const mm = (minute || "00").replace(/[^\d]/g, "").slice(0, 2).padStart(2, "0");
-    const mmNum = Number(mm);
-    if (Number.isNaN(mmNum) || mmNum < 0 || mmNum > 59) {
-      setErr("Minutes invalides (0–59).");
-      return;
-    }
-    const dureeNum = duree === "" ? null : Number(duree);
-    if (dureeNum !== null && (Number.isNaN(dureeNum) || dureeNum < 0)) {
-      setErr("Durée invalide (minutes ≥ 0).");
-      return;
-    }
+    setSaving(true);
+    try {
+      const numero = await getNextSeanceNumber(selectedDossier.id);
+      const heure = `${String(fixedHour).padStart(2, "0")}:${mm}:00`;
 
-    const numero = await getNextSeanceNumber(selectedDossier.id);
-    const heure = `${String(fixedHour).padStart(2, "0")}:${mm}:00`;
-
-    const { error } = await supabase.from("seances").insert({
-      dossier_id: selectedDossier.id,
-      numero_seance: numero,
-      date_seance: date,
-      heure_seance: heure,
-      etat_seance: "programmée",
-      prestataire_id: isAdmin ? prestataireId : user?.id,
-      montant_paye: 0,
-      duree_minutes: dureeNum,
-      note: null,
-    });
-    if (error) {
-      setErr(error.message || "Impossible d’enregistrer la programmation.");
-      return;
+      const { error } = await supabase.from("seances").insert({
+        dossier_id: selectedDossier.id,
+        numero_seance: numero,
+        date_seance: date,
+        heure_seance: heure,
+        etat_seance: "programmée",
+        prestataire_id: isAdmin ? prestataireId : user?.id, // assistants ne voient pas cette modale
+        duree_minutes: (duree || "").trim() === "" ? null : Number(duree),
+        note: null,
+      });
+      if (error) {
+        setErr(error.message || "Impossible d’enregistrer la programmation.");
+        return;
+      }
+      onSuccess();
+    } catch (e: any) {
+      setErr(e?.message || "Erreur lors de l’enregistrement.");
+    } finally {
+      setSaving(false);
     }
-    onSuccess();
   };
 
   return (
@@ -1229,14 +1438,14 @@ function ProgramHereModal({
       <div className="bg-white rounded-xl p-6 w-full max-w-2xl">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">
-            Programmer à {toDateStrReadable(date)} — {String(fixedHour).padStart(2, "0")}:MM
+            Programmer — {toDateStrReadable(date)} • {String(fixedHour).padStart(2, "0")}:{String(fixedMinute).padStart(2, "0")}
           </h3>
           <button onClick={onClose} className="p-2 rounded hover:bg-gray-100">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Recherche + patient */}
+        {/* Patient */}
         <PatientSearchBlock
           search={search}
           setSearch={setSearch}
@@ -1271,7 +1480,7 @@ function ProgramHereModal({
           />
         </div>
 
-        {/* Prestataire */}
+        {/* Prestataire (admin uniquement) */}
         {isAdmin && (
           <div className="mt-3">
             <label className="block text-sm text-gray-700 mb-1">Prestataire</label>
@@ -1289,10 +1498,15 @@ function ProgramHereModal({
           </div>
         )}
 
-        {/* Infos borne min */}
-        {selectedDossier && (
+        {/* Infos bornes */}
+        {selectedDossier && lastProgDate && (
           <div className="mt-2 text-xs text-gray-600">
-            Date minimale autorisée : <b>{minDate}</b>
+            Dernière séance <b>programmée</b> : {new Date(lastProgDate).toLocaleDateString("fr-FR")} à {lastProgTime || ""}
+          </div>
+        )}
+        {date === nowInTZ("Africa/Tunis").dateStr && (
+          <div className="mt-1 text-xs text-gray-600">
+            Borne heure actuelle (Tunis) : {String(nowInTZ("Africa/Tunis").hour).padStart(2, "0")}:{String(nowInTZ("Africa/Tunis").minute).padStart(2, "0")}
           </div>
         )}
 
@@ -1315,18 +1529,20 @@ function ProgramHereModal({
   );
 }
 
-/* ================== Ajouter réalisée ici / Conversion — LOGIQUE BORNES + QUOTA + BLOCADE SI PROGRAMMÉES ================== */
+/* ================== Ajouter réalisée ici / Conversion — montant OBLIGATOIRE ================== */
 function AddRealHereModal({
   date,
   fixedHour,
+  fixedMinute,
   isAdmin,
   currentUserId,
   onClose,
   onSuccess,
-  scheduledSeance, // optionnel: si présent => conversion d'une programmée
+  scheduledSeance, // optionnel: conversion d'une programmée
 }: {
   date: string;
   fixedHour: number;
+  fixedMinute: number;
   isAdmin: boolean;
   currentUserId: string;
   onClose: () => void;
@@ -1341,8 +1557,10 @@ function AddRealHereModal({
   const [users, setUsers] = useState<UserBase[]>([]);
   const [prestataireId, setPrestataireId] = useState<string>(currentUserId);
 
-  const [minute, setMinute] = useState<string>("00");
-  const [montant, setMontant] = useState<string>(scheduledSeance ? String(scheduledSeance.montant_paye ?? 0) : "0");
+  const [minute, setMinute] = useState<string>(String(fixedMinute).padStart(2, "0"));
+  const [montant, setMontant] = useState<string>(
+    scheduledSeance && (scheduledSeance as any).montant_paye != null ? String((scheduledSeance as any).montant_paye) : ""
+  ); // ⛔ vide par défaut
   const [note, setNote] = useState<string>(scheduledSeance?.note || "");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1351,13 +1569,12 @@ function AddRealHereModal({
   const today = toDateStr(new Date());
   const dateOK = isAdmin ? date <= today : date === today;
 
-  // --- BORNES dernière RÉALISÉE du dossier (date + heure)
-  const [lastRealDate, setLastRealDate] = useState<string | null>(null); // "YYYY-MM-DD"
-  const [lastRealTime, setLastRealTime] = useState<string | null>(null); // "HH:MM"
+  // BORNES dernière RÉALISÉE du dossier
+  const [lastRealDate, setLastRealDate] = useState<string | null>(null);
+  const [lastRealTime, setLastRealTime] = useState<string | null>(null);
 
-  // --- Compte des séances programmées pour le dossier sélectionné (blocage ajout si >0)
+  // Compte des programmées (blocage ajout réalisée si >0, hors conversion)
   const [scheduledCount, setScheduledCount] = useState<number>(0);
-  const [scheduledCountLoading, setScheduledCountLoading] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1388,7 +1605,6 @@ function AddRealHereModal({
         }
         return;
       }
-      // Dossiers a_venir/en_cours
       const { data } = await supabase
         .from("dossiers_soins")
         .select("*")
@@ -1400,7 +1616,7 @@ function AddRealHereModal({
     })();
   }, [selectedPatient, scheduledSeance, userBase?.client_id]);
 
-  // Charger la DERNIÈRE séance réalisée pour le dossier choisi
+  // charger la DERNIÈRE réalisée
   useEffect(() => {
     (async () => {
       setLastRealDate(null);
@@ -1416,35 +1632,24 @@ function AddRealHereModal({
         .limit(1);
       if (data && data.length > 0) {
         setLastRealDate(data[0].date_seance as string);
-        setLastRealTime(
-          data[0].heure_seance
-            ? String(data[0].heure_seance).slice(0, 5)
-            : "00:00"
-        );
+        setLastRealTime(data[0].heure_seance ? String(data[0].heure_seance).slice(0, 5) : "00:00");
       }
     })();
   }, [selectedDossier]);
 
-  // Charger le nombre de programmées du dossier sélectionné (sauf en conversion)
+  // nombre de programmées (sauf conversion)
   useEffect(() => {
     (async () => {
       if (!selectedDossier || scheduledSeance) {
         setScheduledCount(0);
         return;
       }
-      setScheduledCountLoading(true);
-      const { count, data, error } = await supabase
+      const { count } = await supabase
         .from("seances")
         .select("id", { count: "exact", head: true })
         .eq("dossier_id", selectedDossier.id)
         .in("etat_seance", ["programmée", "programmee"] as any);
-
-      if (!error) {
-        setScheduledCount(typeof count === "number" ? count : (data?.length ?? 0));
-      } else {
-        setScheduledCount(0);
-      }
-      setScheduledCountLoading(false);
+      setScheduledCount(typeof count === "number" ? count : 0);
     })();
   }, [selectedDossier, scheduledSeance]);
 
@@ -1485,8 +1690,6 @@ function AddRealHereModal({
   const lastHH = lastRealTime ? lastRealTime.slice(0, 2) : null;
   const lastMM = lastRealTime ? lastRealTime.slice(3, 5) : null;
 
-  const hourTooSmall = sameDayAsLast && lastHH ? fixedHour < Number(lastHH) : false;
-
   const minuteNum = Number((minute || "").replace(/[^\d]/g, ""));
   const minuteTooSmallOrEqual =
     sameDayAsLast &&
@@ -1497,12 +1700,20 @@ function AddRealHereModal({
 
   const dateBeforeLast = !!lastRealDate && date < lastRealDate;
 
+  // montant obligatoire
+  const montantValid = useMemo(() => {
+    const v = (montant ?? "").toString().trim();
+    if (v === "") return false;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0;
+  }, [montant]);
+
   const handleSave = async () => {
     setErr("");
 
-    // MODE CONVERSION d'une programmée -> réalisée
+    // CONVERSION programmée -> réalisée
     if (scheduledSeance) {
-      // 🔒 Interdire conversion si FUTUR
+      // interdire si FUTUR
       const sDate = scheduledSeance.date_seance as string;
       const sHH = extractHour(scheduledSeance.heure_seance);
       const sMM = extractMinute(scheduledSeance.heure_seance);
@@ -1511,11 +1722,11 @@ function AddRealHereModal({
         return;
       }
 
-      const montantNum = parseFloat(montant || "0");
-      if (!Number.isFinite(montantNum) || montantNum < 0) {
-        setErr("Montant invalide.");
+      if (!montantValid) {
+        setErr("Le montant payé est obligatoire et doit être ≥ 0.");
         return;
       }
+      const montantNum = Number((montant ?? "").toString().trim());
 
       setSaving(true);
       try {
@@ -1538,7 +1749,7 @@ function AddRealHereModal({
       return;
     }
 
-    // --- AJOUT d'une nouvelle séance RÉALISÉE
+    // AJOUT d'une nouvelle réalisée
     if (!dateOK) {
       setErr("Date non autorisée.");
       return;
@@ -1548,50 +1759,32 @@ function AddRealHereModal({
       return;
     }
 
-    // 🔒 Re-vérification à la volée : des séances programmées pour ce dossier ?
+    // Re-vérification : programmées en attente ?
     {
       const { count, data, error } = await supabase
         .from("seances")
         .select("id", { count: "exact", head: true })
         .eq("dossier_id", selectedDossier.id)
         .in("etat_seance", ["programmée", "programmee"] as any);
-
       const nbProg = !error ? (typeof count === "number" ? count : (data?.length ?? 0)) : 0;
       if (nbProg > 0) {
         setErr(
-          `Impossible d’ajouter une séance réalisée : ${nbProg} séance(s) programmée(s) existent pour ce dossier. ` +
-          `Veuillez d’abord les enregistrer comme réalisées ou les supprimer.`
+          `Impossible d’ajouter une séance réalisée : ${nbProg} programmée(s) en attente. ` +
+          `Veuillez d’abord les réaliser ou les supprimer.`
         );
         return;
       }
     }
 
-    // ➜ CONTRÔLE MAX (avant insert)
-    try {
-      const { remaining, max } = await remainingSlotsForDossier(
-        selectedDossier.id
-      );
-      if (remaining <= 0) {
-        setErr(
-          max
-            ? `Limite atteinte : ce dossier a déjà ${max} séance(s).`
-            : "Limite atteinte."
-        );
-        return;
-      }
-    } catch (e: any) {
-      setErr(e?.message || "Impossible de vérifier le nombre de séances.");
-      return;
-    }
-
-    // minutes format
+    // minutes
     const mm = (minute || "00").replace(/[^\d]/g, "").slice(0, 2).padStart(2, "0");
     const mmNum = Number(mm);
     if (Number.isNaN(mmNum) || mmNum < 0 || mmNum > 59) {
       setErr("Minutes invalides (0–59).");
       return;
     }
-    // BORNES vs dernière réalisée
+
+    // Bornes vs dernière réalisée
     if (lastRealDate && lastRealTime) {
       if (date < lastRealDate) {
         setErr(
@@ -1611,11 +1804,11 @@ function AddRealHereModal({
       }
     }
 
-    const montantNum = parseFloat(montant || "0");
-    if (!Number.isFinite(montantNum) || montantNum < 0) {
-      setErr("Montant invalide.");
+    if (!montantValid) {
+      setErr("Le montant payé est obligatoire et doit être ≥ 0.");
       return;
     }
+    const montantNum = Number((montant ?? "").toString().trim());
 
     setSaving(true);
     try {
@@ -1647,7 +1840,6 @@ function AddRealHereModal({
   const disableSave =
     (scheduledSeance
       ? (() => {
-          // désactiver si future (conversion)
           const sDate = scheduledSeance!.date_seance as string;
           const sHH = extractHour(scheduledSeance!.heure_seance);
           const sMM = extractMinute(scheduledSeance!.heure_seance);
@@ -1656,8 +1848,8 @@ function AddRealHereModal({
       : (
           !dateOK ||
           !selectedDossier ||
+          !montantValid ||
           dateBeforeLast ||
-          (sameDayAsLast && lastHH && fixedHour < Number(lastHH)) ||
           (sameDayAsLast &&
             lastHH &&
             lastMM &&
@@ -1673,8 +1865,8 @@ function AddRealHereModal({
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">
             {scheduledSeance
-              ? `Enregistrer la réalisation — ${toDateStrReadable(date)} • ${String(fixedHour).padStart(2, "0")}:MM`
-              : `Ajouter une séance — ${toDateStrReadable(date)} • ${String(fixedHour).padStart(2, "0")}:MM`}
+              ? `Enregistrer la réalisation — ${toDateStrReadable(date)} • ${String(fixedHour).padStart(2, "0")}:${String(fixedMinute).padStart(2, "0")}`
+              : `Ajouter une séance — ${toDateStrReadable(date)} • ${String(fixedHour).padStart(2, "0")}:${String(fixedMinute).padStart(2, "0")}`}
           </h3>
           <button onClick={onClose} className="p-2 rounded hover:bg-gray-100">
             <X className="w-5 h-5" />
@@ -1705,7 +1897,7 @@ function AddRealHereModal({
           />
         )}
 
-        {/* Alerte: séances programmées à traiter (ajout uniquement, pas conversion) */}
+        {/* Alerte: programmées en attente */}
         {!scheduledSeance && selectedDossier && scheduledCount > 0 && (
           <div className="mt-2 bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded text-sm">
             Ce dossier comporte <b>{scheduledCount}</b> séance(s) programmée(s).
@@ -1733,7 +1925,7 @@ function AddRealHereModal({
                   ? "border-red-300"
                   : "border-gray-300"
               }`}
-              disabled={!!scheduledSeance} // conversion : on garde l'heure/minute existantes
+              disabled={!!scheduledSeance} // conversion : garde H/M de la programmée
             />
             {sameDayAsLast && lastRealTime && fixedHour === Number(lastHH) && !scheduledSeance && (
               <p
@@ -1747,35 +1939,35 @@ function AddRealHereModal({
           </div>
           <div>
             <label className="block text-sm text-gray-700 mb-1">
-              Montant payé (DT)
+              Montant payé (DT) *
             </label>
             <input
               type="number"
+              inputMode="decimal"
               step="0.01"
+              min={0}
+              required
               value={montant}
               onChange={(e) => setMontant(e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              placeholder="ex: 40.00"
+              className={`w-full border rounded px-3 py-2 ${
+                montantValid ? "border-gray-300" : "border-red-300"
+              }`}
             />
+            {!montantValid && (
+              <p className="text-xs text-red-600 mt-1">Le montant est obligatoire et doit être ≥ 0.</p>
+            )}
           </div>
         </div>
 
-        {/* Prestataire */}
-        <div className="mt-3">
-          <label className="block text-sm text-gray-700 mb-1">Prestataire</label>
-          <input
-            value={isAdmin ? undefined : "Vous"}
-            disabled={!isAdmin}
-            placeholder={isAdmin ? "" : "Vous"}
-            className={`w-full border rounded px-3 py-2 ${
-              isAdmin ? "bg-white" : "bg-gray-50 text-gray-600"
-            }`}
-            onChange={() => {}}
-          />
-          {isAdmin && (
+        {/* Prestataire : pas de champ texte ; liste (admin), sinon prestataire = vous */}
+        {isAdmin && (
+          <div className="mt-3">
+            <label className="block text-sm text-gray-700 mb-1">Prestataire</label>
             <select
               value={prestataireId}
               onChange={(e) => setPrestataireId(e.target.value)}
-              className="mt-2 w-full border rounded px-3 py-2 bg-white"
+              className="w-full border rounded px-3 py-2 bg-white"
             >
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
@@ -1783,7 +1975,18 @@ function AddRealHereModal({
                 </option>
               ))}
             </select>
-          )}
+          </div>
+        )}
+
+        <div className="mt-3">
+          <label className="block text-sm text-gray-700 mb-1">Note (optionnelle)</label>
+          <textarea
+            rows={3}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Ajouter une note…"
+            className="w-full border rounded px-3 py-2"
+          />
         </div>
 
         {/* Infos borne */}
@@ -1796,11 +1999,6 @@ function AddRealHereModal({
                 {lastRealTime || ""}
               </b>
             </span>
-            {(dateBeforeLast || hourTooSmall) && (
-              <div className="mt-1 text-red-600">
-                La nouvelle séance doit être postérieure à cette date/heure.
-              </div>
-            )}
           </div>
         )}
 
@@ -2022,4 +2220,14 @@ function ErrorNote({ text }: { text: string }) {
       {text}
     </div>
   );
+}
+
+/* ------------------ petite util vue mois ------------------ */
+function onChangeMonthYear(
+  month: number,
+  year: number,
+  setAnchorDate: (v: string) => void
+) {
+  const d = new Date(year, month, 1);
+  setAnchorDate(toDateStr(d));
 }
