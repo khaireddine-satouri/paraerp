@@ -9,6 +9,7 @@ export type PlanningExportRow = {
   date: string;
   /** "HH:MM" ou null */
   heure: string | null;
+  duree_minutes?: number | null;
   /** "Prénom Nom" */
   patient: string;
   /** motif du dossier */
