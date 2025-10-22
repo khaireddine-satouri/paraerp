@@ -1203,7 +1203,7 @@ function AddSeanceModal({
               }`}
             />
             {!montantValid && (
-              <p className="text-xs text-red-600 mt-1">Le montant est obligatoire et doit être ≥ 0.</p>
+              <p className="text-xs text-red-600 mt-1">Le montant est obligatoire</p>
             )}
           </div>
 
