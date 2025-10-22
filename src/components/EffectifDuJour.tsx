@@ -689,8 +689,12 @@ function AddSeanceModal({
   // ---- Prestataire / paiement / note ----
   const [users, setUsers] = useState<UserBase[]>([]);
   const [selectedPrestataire, setSelectedPrestataire] = useState(user?.id || "");
+
+  // ⛔ au lieu de "0", on met '' si absent et on VALIDE plus bas
   const [montantPaye, setMontantPaye] = useState(
-    scheduledSeance ? String((scheduledSeance as any).montant_paye ?? 0) : "0"
+  scheduledSeance && (scheduledSeance as any).montant_paye != null
+    ? String((scheduledSeance as any).montant_paye)
+    : ""
   );
   const [note, setNote] = useState(scheduledSeance?.note || "");
 
