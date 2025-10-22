@@ -513,7 +513,6 @@ export default function AdminAnalytics({
   doc.save(`analytics_${effectiveRange.start}_${effectiveRange.end}.pdf`);
 };
 
-
   if (!isAdmin) {
     return <div className="p-6 text-gray-600">Accès réservé aux administrateurs.</div>;
   }
