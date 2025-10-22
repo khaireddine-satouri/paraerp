@@ -20,6 +20,10 @@ import {
   CheckCircle2,
   SquarePen,
   Download,
+  FileText,          // <— PDF
+  FileSpreadsheet,   // <— Excel
+  Funnel,            // <— Filtres
+  ChevronDown,       // <— chevron mobile
 } from "lucide-react";
 
 import EditSeanceModal from "./EditSeanceModal";
@@ -168,6 +172,9 @@ export default function Planning({
 }) {
   const { user, userBase } = useAuth();
   const isAdmin = userBase?.type_utilisateur === "admin";
+  
+  // Panneau outils (mobile)
+  const [showMobileTools, setShowMobileTools] = useState(false);
 
   // Vue & filtres
   type ViewMode = "day" | "week" | "month";
@@ -581,184 +588,324 @@ export default function Planning({
 
 
     if (kind === "pdf") {
-      exportProgrammationsPDFByDay(exportRows, pdfFrom, pdfTo, "Séances programmées");
-    } else {
-      exportProgrammationsExcelByDay(exportRows, pdfFrom, pdfTo);
-    }
+  exportProgrammationsPDFByDay(exportRows, { from: pdfFrom, to: pdfTo, title: "Séances programmées" });
+} else {
+  exportProgrammationsExcelByDay(exportRows, { from: pdfFrom, to: pdfTo });
+}
+
   };
 
   return (
     <div className="space-y-4">
       {/* Header / filtres */}
-      <div className="bg-white rounded-xl shadow p-4 sm:p-6">
-        <div className="flex flex-col gap-4">
-          {/* 1) Titre */}
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">{titleLabel}</h2>
+      {/* Header / filtres */}
+<div className="bg-white rounded-xl shadow p-4 sm:p-6">
+  <div className="flex flex-col gap-4">
+    {/* Titre */}
+    <div className="flex items-center justify-between gap-2">
+      <h2 className="text-xl font-bold text-gray-900">{titleLabel}</h2>
+
+      {/* Bouton mobile : Filtres & export */}
+      <button
+        type="button"
+        onClick={() => setShowMobileTools((v) => !v)}
+        className="md:hidden inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm hover:bg-gray-50"
+        aria-expanded={showMobileTools}
+        aria-controls="planning-mobile-tools"
+        title="Filtres et export"
+      >
+        <Funnel className="w-4 h-4" />
+        Filtres & export
+        <ChevronDown
+          className={`w-4 h-4 transition-transform ${showMobileTools ? "rotate-180" : ""}`}
+        />
+      </button>
+    </div>
+
+    {/* NAVIGATION — compacte (mobile) */}
+    <div className="md:hidden flex items-center gap-2">
+      <button
+        onClick={goPrev}
+        className="p-2 rounded-lg border hover:bg-gray-50 shrink-0"
+        title="Précédent"
+      >
+        <ChevronLeft className="w-5 h-5" />
+      </button>
+
+      <input
+        type="date"
+        value={anchorDate}
+        onChange={(e) => setAnchorDate(e.target.value)}
+        className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
+      />
+
+      <button
+        onClick={goNext}
+        className="p-2 rounded-lg border hover:bg-gray-50 shrink-0"
+        title="Suivant"
+      >
+        <ChevronRight className="w-5 h-5" />
+      </button>
+
+      <button
+        onClick={goToday}
+        className="px-3 py-2 rounded-lg border text-sm hover:bg-gray-50 shrink-0"
+        title="Aujourd’hui"
+      >
+        Aujourd’hui
+      </button>
+    </div>
+
+    {/* NAVIGATION — large (desktop) */}
+    <div className="hidden md:flex items-center gap-2">
+      <button
+        onClick={goPrev}
+        className="p-2 rounded-lg border hover:bg-gray-50 shrink-0"
+        title="Précédent"
+      >
+        <ChevronLeft className="w-5 h-5" />
+      </button>
+
+      {mode === "month" ? (
+        <div className="flex w-full gap-2">
+          <select
+            value={monthSelect}
+            onChange={(e) => {
+              const m = Number(e.target.value);
+              setMonthSelect(m);
+              onChangeMonthYear(m, yearSelect, setAnchorDate);
+            }}
+            className="w-full sm:w-auto flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg bg-white"
+            aria-label="Mois"
+          >
+            {Array.from({ length: 12 }, (_, i) => i).map((m) => (
+              <option key={m} value={m}>
+                {new Date(2000, m, 1).toLocaleDateString("fr-FR", { month: "long" })}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={yearSelect}
+            onChange={(e) => {
+              const y = Number(e.target.value);
+              setYearSelect(y);
+              onChangeMonthYear(monthSelect, y, setAnchorDate);
+            }}
+            className="w-full sm:w-auto flex-[0.8] min-w-0 px-3 py-2 border border-gray-300 rounded-lg bg-white"
+            aria-label="Année"
+          >
+            {yearsRange.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        <input
+          type="date"
+          value={anchorDate}
+          onChange={(e) => setAnchorDate(e.target.value)}
+          className="w-full sm:w-auto flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
+        />
+      )}
+
+      <button
+        onClick={goNext}
+        className="p-2 rounded-lg border hover:bg-gray-50 shrink-0"
+        title="Suivant"
+      >
+        <ChevronRight className="w-5 h-5" />
+      </button>
+
+      <button
+        onClick={goToday}
+        className="px-3 py-2 rounded-lg border text-sm hover:bg-gray-50 shrink-0"
+        title="Aller à aujourd’hui"
+      >
+        Aujourd’hui
+      </button>
+    </div>
+
+    {/* OUTILS — mobile (panneau repliable) */}
+    <div
+      id="planning-mobile-tools"
+      className={`md:hidden overflow-hidden transition-[max-height,opacity] duration-300 ${
+        showMobileTools ? "max-h-[800px] opacity-100" : "max-h-0 opacity-0"
+      }`}
+    >
+      <div className="pt-2 mt-2 border-t grid grid-cols-1 gap-3">
+        {/* Vue + État + Plage */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col">
+            <label className="text-sm text-gray-600 mb-1">Vue</label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as any)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white"
+            >
+              <option value="day">Jour</option>
+              <option value="week">Semaine</option>
+              <option value="month">Mois</option>
+            </select>
           </div>
-
-          {/* 2) Navigation temps */}
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={goPrev}
-                className="p-2 rounded hover:bg-gray-100 shrink-0"
-                title="Précédent"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-
-              {mode === "month" ? (
-                <div className="flex w-full gap-2">
-                  <select
-                    value={monthSelect}
-                    onChange={(e) => {
-                      const m = Number(e.target.value);
-                      setMonthSelect(m);
-                      onChangeMonthYear(m, yearSelect, setAnchorDate);
-                    }}
-                    className="w-full sm:w-auto flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg bg-white"
-                    aria-label="Mois"
-                  >
-                    {Array.from({ length: 12 }, (_, i) => i).map((m) => (
-                      <option key={m} value={m}>
-                        {new Date(2000, m, 1).toLocaleDateString("fr-FR", {
-                          month: "long",
-                        })}
-                      </option>
-                    ))}
-                  </select>
-
-                  <select
-                    value={yearSelect}
-                    onChange={(e) => {
-                      const y = Number(e.target.value);
-                      setYearSelect(y);
-                      onChangeMonthYear(monthSelect, y, setAnchorDate);
-                    }}
-                    className="w-full sm:w-auto flex-[0.8] min-w-0 px-3 py-2 border border-gray-300 rounded-lg bg-white"
-                    aria-label="Année"
-                  >
-                    {yearsRange.map((y) => (
-                      <option key={y} value={y}>
-                        {y}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <input
-                  type="date"
-                  value={anchorDate}
-                  onChange={(e) => setAnchorDate(e.target.value)}
-                  className="w-full sm:w-auto flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg"
-                />
-              )}
-
-              <button
-                onClick={goNext}
-                className="p-2 rounded hover:bg-gray-100 shrink-0"
-                title="Suivant"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Outils secondaires */}
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                onClick={goToday}
-                className="px-3 py-2 rounded-lg border text-sm hover:bg-gray-50"
-                title="Aller à aujourd’hui"
-              >
-                Aujourd’hui
-              </button>
-
-              {/* Vue */}
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">Vue</label>
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as any)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
-                >
-                  <option value="day">Jour</option>
-                  <option value="week">Semaine</option>
-                  <option value="month">Mois</option>
-                </select>
-              </div>
-
-              {/* État */}
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">État</label>
-                <select
-                  value={etatFilter}
-                  onChange={(e) => setEtatFilter(e.target.value as any)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
-                >
-                  <option value="programmée">Programmées</option>
-                  <option value="réalisée">Réalisées</option>
-                </select>
-              </div>
-
-              {/* Plage d’affichage */}
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600">Plage</label>
-                <select
-                  value={slotMinutes}
-                  onChange={(e) => setSlotMinutes(Number(e.target.value) as 30 | 60)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
-                  title="Taille des créneaux"
-                >
-                  <option value={60}>1 h</option>
-                  <option value={30}>30 min</option>
-                </select>
-              </div>
-
-              {/* Export programmées */}
-              {etatFilter === "programmée" && (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="date"
-                    min={todayStr}
-                    value={pdfFrom}
-                    onChange={(e) => setPdfFrom(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg"
-                    title="De"
-                  />
-                  <span className="text-gray-500">→</span>
-                  <input
-                    type="date"
-                    min={todayStr}
-                    value={pdfTo}
-                    onChange={(e) => setPdfTo(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg"
-                    title="À"
-                  />
-
-                  <button
-                    onClick={() => handleExport("pdf")}
-                    className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
-                    title="Exporter PDF (1 page par jour)"
-                  >
-                    <Download className="w-4 h-4" />
-                    PDF
-                  </button>
-
-                  <button
-                    onClick={() => handleExport("excel")}
-                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
-                    title="Exporter Excel (1 onglet par jour)"
-                  >
-                    <Download className="w-4 h-4" />
-                    Excel
-                  </button>
-                </div>
-              )}
-            </div>
+          <div className="flex flex-col">
+            <label className="text-sm text-gray-600 mb-1">État</label>
+            <select
+              value={etatFilter}
+              onChange={(e) => setEtatFilter(e.target.value as any)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white"
+            >
+              <option value="programmée">Programmées</option>
+              <option value="réalisée">Réalisées</option>
+            </select>
+          </div>
+          <div className="flex flex-col">
+            <label className="text-sm text-gray-600 mb-1">Plage</label>
+            <select
+              value={slotMinutes}
+              onChange={(e) => setSlotMinutes(Number(e.target.value) as 30 | 60)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white"
+              title="Taille des créneaux"
+            >
+              <option value={60}>1 h</option>
+              <option value={30}>30 min</option>
+            </select>
           </div>
         </div>
+
+        {/* Export (visible si Programmées) */}
+        {etatFilter === "programmée" && (
+          <div className="grid grid-cols-1 gap-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                min={todayStr}
+                value={pdfFrom}
+                onChange={(e) => setPdfFrom(e.target.value)}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg"
+                title="De"
+              />
+              <span className="text-gray-500">→</span>
+              <input
+                type="date"
+                min={todayStr}
+                value={pdfTo}
+                onChange={(e) => setPdfTo(e.target.value)}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg"
+                title="À"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleExport("pdf")}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
+                title="Exporter PDF (1 page par jour)"
+              >
+                <FileText className="w-4 h-4" />
+                PDF
+              </button>
+              <button
+                onClick={() => handleExport("excel")}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+                title="Exporter Excel (1 onglet par jour)"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Excel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+
+    {/* OUTILS — desktop */}
+    <div className="hidden md:flex md:flex-wrap items-center gap-3">
+      {/* Vue */}
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-gray-600">Vue</label>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as any)}
+          className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+        >
+          <option value="day">Jour</option>
+          <option value="week">Semaine</option>
+          <option value="month">Mois</option>
+        </select>
+      </div>
+
+      {/* État */}
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-gray-600">État</label>
+        <select
+          value={etatFilter}
+          onChange={(e) => setEtatFilter(e.target.value as any)}
+          className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+        >
+          <option value="programmée">Programmées</option>
+          <option value="réalisée">Réalisées</option>
+        </select>
+      </div>
+
+      {/* Plage */}
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-gray-600">Plage</label>
+        <select
+          value={slotMinutes}
+          onChange={(e) => setSlotMinutes(Number(e.target.value) as 30 | 60)}
+          className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+          title="Taille des créneaux"
+        >
+          <option value={60}>1 h</option>
+          <option value={30}>30 min</option>
+        </select>
+      </div>
+
+      {/* Export programmées */}
+      {etatFilter === "programmée" && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="date"
+            min={todayStr}
+            value={pdfFrom}
+            onChange={(e) => setPdfFrom(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg"
+            title="De"
+          />
+          <span className="text-gray-500">→</span>
+          <input
+            type="date"
+            min={todayStr}
+            value={pdfTo}
+            onChange={(e) => setPdfTo(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg"
+            title="À"
+          />
+
+          <button
+            onClick={() => handleExport("pdf")}
+            className="inline-flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
+            title="Exporter PDF (1 page par jour)"
+          >
+            <FileText className="w-4 h-4" />
+            PDF
+          </button>
+
+          <button
+            onClick={() => handleExport("excel")}
+            className="inline-flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+            title="Exporter Excel (1 onglet par jour)"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Excel
+          </button>
+        </div>
+      )}
+    </div>
+  </div>
+</div>
+
 
       {/* Grid */}
       <div className="bg-white rounded-xl shadow overflow-hidden">
