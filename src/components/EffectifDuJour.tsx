@@ -632,6 +632,7 @@ function PatientThumb({ patient, size = 48 }: { patient: Patient | null; size?: 
    Modal d’AJOUT de séance (réalisée) — bornes vs dernière réalisée
    + RÈGLE ajoutée : blocage si des séances programmées existent pour le dossier choisi
    (conversion programmée → réalisée NON bloquée pour admin, et pour assistants seulement le jour même)
+   + Montant payé OBLIGATOIRE
 ------------------------------------------------------- */
 function AddSeanceModal({
   date,
@@ -690,21 +691,21 @@ function AddSeanceModal({
   const [users, setUsers] = useState<UserBase[]>([]);
   const [selectedPrestataire, setSelectedPrestataire] = useState(user?.id || "");
 
-  // ⛔ au lieu de "0", on met '' si absent et on VALIDE plus bas
+  // Montant OBLIGATOIRE : '' par défaut (sauf si la séance programmée a déjà une valeur)
   const [montantPaye, setMontantPaye] = useState(
-  scheduledSeance && (scheduledSeance as any).montant_paye != null
-    ? String((scheduledSeance as any).montant_paye)
-    : ""
+    scheduledSeance && (scheduledSeance as any).montant_paye != null
+      ? String((scheduledSeance as any).montant_paye)
+      : ""
   );
   const [note, setNote] = useState(scheduledSeance?.note || "");
-  // ✅ montant obligatoire (champ non vide, nombre >= 0)
-const montantValid = useMemo(() => {
-  const v = (montantPaye ?? "").toString().trim();
-  if (v === "") return false;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0;
-}, [montantPaye]);
 
+  // Validation du montant
+  const montantValid = useMemo(() => {
+    const v = (montantPaye ?? "").toString().trim();
+    if (v === "") return false;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0;
+  }, [montantPaye]);
 
   // ---- Heure / Minute / Durée ----
   const hoursOptions = useMemo(
@@ -844,39 +845,39 @@ const montantValid = useMemo(() => {
   const handleSubmit = async () => {
     // ⚠️ Conversion d’une "programmée" en "réalisée"
     if (scheduledSeance) {
-  if (!isAdmin && date < today) {
-    alert("Action non autorisée : un assistant ne peut pas enregistrer la réalisation d’une séance programmée d’un jour passé.");
-    return;
-  }
+      // ✅ Règle demandée : assistant interdit sur un jour passé
+      if (!isAdmin && date < today) {
+        alert("Action non autorisée : un assistant ne peut pas enregistrer la réalisation d’une séance programmée d’un jour passé.");
+        return;
+      }
 
-  // ⛔ exiger un montant valide
-  if (!montantValid) {
-    alert("Le montant payé est obligatoire et doit être ≥ 0.");
-    return;
-  }
-  const amount = Number((montantPaye ?? "").toString().trim());
+      // ⛔ Montant obligatoire
+      if (!montantValid) {
+        alert("Le montant payé est obligatoire et doit être ≥ 0.");
+        return;
+      }
+      const amount = Number((montantPaye ?? "").toString().trim());
 
-  setLoading(true);
-  try {
-    const { error: updErr } = await supabase
-      .from("seances")
-      .update({
-        etat_seance: "réalisée" as EtatSeance,
-        prestataire_id: selectedPrestataire,
-        montant_paye: amount,    // ✅ plus de défaut 0
-        note: note || null,
-      })
-      .eq("id", scheduledSeance.id);
-    if (updErr) throw updErr;
-    onSuccess();
-  } catch (e: any) {
-    alert(e?.message || "Erreur lors de l’enregistrement.");
-  } finally {
-    setLoading(false);
-  }
-  return;
-}
-
+      setLoading(true);
+      try {
+        const { error: updErr } = await supabase
+          .from("seances")
+          .update({
+            etat_seance: "réalisée" as EtatSeance,
+            prestataire_id: selectedPrestataire,
+            montant_paye: amount,
+            note: note || null,
+          })
+          .eq("id", scheduledSeance.id);
+        if (updErr) throw updErr;
+        onSuccess();
+      } catch (e: any) {
+        alert(e?.message || "Erreur lors de l’enregistrement.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     // ➜ Ajout direct d’une nouvelle réalisée
     if (!selectedDossier) {
@@ -921,6 +922,13 @@ const montantValid = useMemo(() => {
       return;
     }
 
+    // ⛔ Montant obligatoire
+    if (!montantValid) {
+      alert("Le montant payé est obligatoire et doit être ≥ 0.");
+      return;
+    }
+    const amount = Number((montantPaye ?? "").toString().trim());
+
     // RÈGLE des bornes vs DERNIÈRE RÉALISÉE
     if (lastRealDate && lastRealTime) {
       if (date < lastRealDate) {
@@ -959,7 +967,7 @@ const montantValid = useMemo(() => {
         heure_seance: heureStr,
         etat_seance: "réalisée" as EtatSeance,
         prestataire_id: selectedPrestataire,
-        montant_paye: parseFloat(montantPaye) || 0,
+        montant_paye: amount,
         duree_minutes: dureeNum,
         note: note || null,
       });
@@ -1178,30 +1186,26 @@ const montantValid = useMemo(() => {
             </>
           )}
 
+          {/* Montant obligatoire */}
           <div>
-  <label className="block text-sm font-medium text-gray-700 mb-2">
-    Montant payé (DT) *
-  </label>
-  <input
-    type="number"
-    inputMode="decimal"
-    step="0.01"
-    min={0}
-    required
-    value={montantPaye}
-    onChange={(e) => setMontantPaye(e.target.value)}
-    placeholder="ex: 40.00"
-    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
-      montantValid ? "border-gray-300 focus:ring-teal-500"
-                   : "border-red-300 focus:ring-red-200"
-    }`}
-  />
-  {!montantValid && (
-    <p className="text-xs text-red-600 mt-1">
-      Le montant est obligatoire et doit être ≥ 0.
-    </p>
-  )}
-</div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Montant payé (DT) *</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min={0}
+              required
+              value={montantPaye}
+              onChange={(e) => setMontantPaye(e.target.value)}
+              placeholder="ex: 40.00"
+              className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
+                montantValid ? "border-gray-300 focus:ring-teal-500" : "border-red-300 focus:ring-red-200"
+              }`}
+            />
+            {!montantValid && (
+              <p className="text-xs text-red-600 mt-1">Le montant est obligatoire et doit être ≥ 0.</p>
+            )}
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Note (optionnelle)</label>
@@ -1218,6 +1222,7 @@ const montantValid = useMemo(() => {
             onClick={handleSubmit}
             disabled={
               loading ||
+              !montantValid || // ⛔ montant obligatoire
               (!!lastRealDate && date < lastRealDate) ||
               (sameDayAsLast && minuteTooSmallOrEqual) ||
               (!scheduledSeance && selectedDossier && scheduledCount > 0) || // ⛔ blocage si programmées en attente
