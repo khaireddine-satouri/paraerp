@@ -18,9 +18,9 @@ export interface PlanningExportRow {
 }
 
 export interface PlanningExportOptions {
-  /** borne min d’affichage (YYYY-MM-DD) – utilisé pour le titre et le nom du fichier */
+  /** borne min d’affichage (YYYY-MM-DD) – utilisé uniquement pour le nom de fichier */
   from?: string;
-  /** borne max d’affichage (YYYY-MM-DD) – utilisé pour le titre et le nom du fichier */
+  /** borne max d’affichage (YYYY-MM-DD) – utilisé uniquement pour le nom de fichier */
   to?: string;
   /** titre principal (par défaut: "Séances programmées") */
   title?: string;
@@ -39,15 +39,6 @@ function toFRDateLabel(dateISO: string) {
     day: "2-digit",
     month: "long",
     year: "numeric",
-  });
-}
-
-function toFRShort(dateISO: string) {
-  const d = new Date(dateISO);
-  return d.toLocaleDateString("fr-FR", {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
   });
 }
 
@@ -88,8 +79,8 @@ function filename(base: string | undefined, from?: string, to?: string, ext: "pd
 /**
  * Exporte les séances programmées en PDF, 1 page par jour.
  * - Orientation paysage (par défaut)
- * - En-tête avec la période (from/to) si fournie
  * - Tableau : Heure | Durée (min) | Patient | Motif | Prestataire | Note
+ * - Bordures grises visibles aussi dans l’en-tête
  */
 export function exportProgrammationsPDFByDay(
   rows: PlanningExportRow[],
@@ -97,7 +88,7 @@ export function exportProgrammationsPDFByDay(
 ) {
   const { title = "Séances programmées", landscape = true } = options;
 
-  // Déterminer la période si absente
+  // Période utilisée uniquement pour le nom de fichier
   const { from: computedFrom, to: computedTo } = computeRangeFromRows(rows);
   const from = options.from ?? computedFrom;
   const to = options.to ?? computedTo;
@@ -111,6 +102,7 @@ export function exportProgrammationsPDFByDay(
   const days = Array.from(byDay.keys()).sort(byDateAsc);
 
   const doc = new jsPDF({ orientation: landscape ? "landscape" : "portrait" });
+  const lineGray: [number, number, number] = [200, 200, 200]; // gris bordures
 
   days.forEach((day, idx) => {
     if (idx > 0) doc.addPage();
@@ -123,16 +115,6 @@ export function exportProgrammationsPDFByDay(
     doc.text(title, pageWidth / 2, 12, { align: "center" });
     doc.setFontSize(11);
     doc.text(toFRDateLabel(day), pageWidth / 2, 18, { align: "center" });
-
-    if (from && to) {
-      doc.setFontSize(9);
-      doc.text(
-        `Période : ${toFRShort(from)} → ${toFRShort(to)}`,
-        pageWidth / 2,
-        24,
-        { align: "center" }
-      );
-    }
 
     const dayRows = (byDay.get(day) || []).sort((a, b) =>
       timeKey(a.heure).localeCompare(timeKey(b.heure))
@@ -150,8 +132,28 @@ export function exportProgrammationsPDFByDay(
         r.note ?? "—",
       ]),
       theme: "grid",
-      headStyles: { fillColor: [13, 148, 136] }, // teal-600
-      styles: { fontSize: 9, cellPadding: 2 },
+      // Styles globaux (affectent aussi l’en-tête si non surchargé)
+      styles: {
+        fontSize: 9,
+        cellPadding: 2,
+        lineColor: lineGray,
+        lineWidth: 0.2,
+      },
+      // En-tête : fond teal + bordures grises visibles
+      headStyles: {
+        fillColor: [13, 148, 136], // teal-600
+        textColor: 255,
+        lineColor: lineGray,
+        lineWidth: 0.2,
+      },
+      // Corps : bordures grises (cohérence)
+      bodyStyles: {
+        lineColor: lineGray,
+        lineWidth: 0.2,
+      },
+      // Bordure du tableau
+      tableLineColor: lineGray,
+      tableLineWidth: 0.2,
       columnStyles: {
         0: { cellWidth: 20 }, // Heure
         1: { cellWidth: 22 }, // Durée
@@ -198,7 +200,7 @@ export function exportProgrammationsExcelByDay(
   rows: PlanningExportRow[],
   options: PlanningExportOptions = {}
 ) {
-  // Déterminer la période si absente
+  // Période utilisée uniquement pour le nom de fichier
   const { from: computedFrom, to: computedTo } = computeRangeFromRows(rows);
   const from = options.from ?? computedFrom;
   const to = options.to ?? computedTo;
