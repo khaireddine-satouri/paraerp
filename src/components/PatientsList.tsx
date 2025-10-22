@@ -58,7 +58,13 @@ export default function PatientsList({ onSelectPatient }: PatientsListProps) {
 
       const allTokensInFull = tokens.every((t) => fullFL.includes(t) || fullLF.includes(t));
       const simpleMatch = first.includes(term) || last.includes(term);
-      const phoneMatch = digits.length >= 3 && p.telephone.replace(/\D/g, '').includes(digits);
+
+      const phoneMatch =
+        digits.length >= 3 &&
+        (
+          (p.telephone || '').replace(/\D/g, '').includes(digits) ||
+          (p.telephone_2 ? p.telephone_2.replace(/\D/g, '').includes(digits) : false)
+        );
 
       return allTokensInFull || simpleMatch || phoneMatch;
     });
@@ -151,7 +157,7 @@ export default function PatientsList({ onSelectPatient }: PatientsListProps) {
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
           <input
             type="text"
-            placeholder="Rechercher un patient..."
+            placeholder="Rechercher un patient (nom, prénom, téléphone)..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
@@ -190,8 +196,14 @@ export default function PatientsList({ onSelectPatient }: PatientsListProps) {
                   </h3>
                   <div className="flex items-center gap-1 text-sm text-gray-600 mt-1">
                     <Phone className="w-4 h-4" />
-                    {patient.telephone}
+                    <span className="truncate">{patient.telephone}</span>
                   </div>
+                  {patient.telephone_2 && (
+                    <div className="flex items-center gap-1 text-sm text-gray-600 mt-0.5">
+                      <Phone className="w-4 h-4 opacity-70" />
+                      <span className="truncate">{patient.telephone_2}</span>
+                    </div>
+                  )}
                 </button>
               </div>
 
@@ -273,6 +285,7 @@ function AddPatientModal({ onClose, onSuccess, userId, clientId }: AddPatientMod
   const [nom, setNom] = useState('');
   const [prenom, setPrenom] = useState('');
   const [telephone, setTelephone] = useState('');
+  const [telephone2, setTelephone2] = useState(''); // NEW
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -307,6 +320,7 @@ function AddPatientModal({ onClose, onSuccess, userId, clientId }: AddPatientMod
           nom: nom.trim(),
           prenom: prenom.trim(),
           telephone: telephone.trim(),
+          telephone_2: telephone2.trim() || null, // NEW
           created_by: userId,
           client_id: clientId,
         })
@@ -396,6 +410,17 @@ function AddPatientModal({ onClose, onSuccess, userId, clientId }: AddPatientMod
               onChange={(e) => setTelephone(e.target.value)}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Téléphone 2 (optionnel)</label>
+            <input
+              type="tel"
+              value={telephone2}
+              onChange={(e) => setTelephone2(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
+              placeholder="Ex : 22 333 444"
             />
           </div>
 
