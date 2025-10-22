@@ -697,6 +697,14 @@ function AddSeanceModal({
     : ""
   );
   const [note, setNote] = useState(scheduledSeance?.note || "");
+  // ✅ montant obligatoire (champ non vide, nombre >= 0)
+const montantValid = useMemo(() => {
+  const v = (montantPaye ?? "").toString().trim();
+  if (v === "") return false;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0;
+}, [montantPaye]);
+
 
   // ---- Heure / Minute / Durée ----
   const hoursOptions = useMemo(
@@ -836,32 +844,39 @@ function AddSeanceModal({
   const handleSubmit = async () => {
     // ⚠️ Conversion d’une "programmée" en "réalisée"
     if (scheduledSeance) {
-      // ✅ Règle demandée : assistant interdit sur un jour passé
-      if (!isAdmin && date < today) {
-        alert("Action non autorisée : un assistant ne peut pas enregistrer la réalisation d’une séance programmée d’un jour passé.");
-        return;
-      }
+  if (!isAdmin && date < today) {
+    alert("Action non autorisée : un assistant ne peut pas enregistrer la réalisation d’une séance programmée d’un jour passé.");
+    return;
+  }
 
-      setLoading(true);
-      try {
-        const { error: updErr } = await supabase
-          .from("seances")
-          .update({
-            etat_seance: "réalisée" as EtatSeance,
-            prestataire_id: selectedPrestataire,
-            montant_paye: parseFloat(montantPaye) || 0,
-            note: note || null,
-          })
-          .eq("id", scheduledSeance.id);
-        if (updErr) throw updErr;
-        onSuccess();
-      } catch (e: any) {
-        alert(e?.message || "Erreur lors de l’enregistrement.");
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
+  // ⛔ exiger un montant valide
+  if (!montantValid) {
+    alert("Le montant payé est obligatoire et doit être ≥ 0.");
+    return;
+  }
+  const amount = Number((montantPaye ?? "").toString().trim());
+
+  setLoading(true);
+  try {
+    const { error: updErr } = await supabase
+      .from("seances")
+      .update({
+        etat_seance: "réalisée" as EtatSeance,
+        prestataire_id: selectedPrestataire,
+        montant_paye: amount,    // ✅ plus de défaut 0
+        note: note || null,
+      })
+      .eq("id", scheduledSeance.id);
+    if (updErr) throw updErr;
+    onSuccess();
+  } catch (e: any) {
+    alert(e?.message || "Erreur lors de l’enregistrement.");
+  } finally {
+    setLoading(false);
+  }
+  return;
+}
+
 
     // ➜ Ajout direct d’une nouvelle réalisée
     if (!selectedDossier) {
@@ -1164,16 +1179,29 @@ function AddSeanceModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Montant payé (DT)</label>
-            <input
-              type="number"
-              step="0.01"
-              min={0}
-              value={montantPaye}
-              onChange={(e) => setMontantPaye(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
-            />
-          </div>
+  <label className="block text-sm font-medium text-gray-700 mb-2">
+    Montant payé (DT) *
+  </label>
+  <input
+    type="number"
+    inputMode="decimal"
+    step="0.01"
+    min={0}
+    required
+    value={montantPaye}
+    onChange={(e) => setMontantPaye(e.target.value)}
+    placeholder="ex: 40.00"
+    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
+      montantValid ? "border-gray-300 focus:ring-teal-500"
+                   : "border-red-300 focus:ring-red-200"
+    }`}
+  />
+  {!montantValid && (
+    <p className="text-xs text-red-600 mt-1">
+      Le montant est obligatoire et doit être ≥ 0.
+    </p>
+  )}
+</div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Note (optionnelle)</label>
