@@ -420,7 +420,6 @@ function AddPatientModal({ onClose, onSuccess, userId, clientId }: AddPatientMod
               value={telephone2}
               onChange={(e) => setTelephone2(e.target.value)}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
-              placeholder="Ex : 22 333 444"
             />
           </div>
 
