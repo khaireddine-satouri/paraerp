@@ -77,7 +77,6 @@ function nowInTunis() {
 export default function DossierDetail({ dossier, patient, onBack }: DossierDetailProps) {
   const { user, userBase } = useAuth();
   const isAdmin = userBase?.type_utilisateur === 'admin';
-  const isAssistant = userBase?.type_utilisateur === 'assistant';
 
   const [dossierFromDB, setDossierFromDB] = useState<DossierSoin | null>(null);
   const [seances, setSeances] = useState<(Seance & { prestataire?: UserBase })[]>([]);
@@ -185,7 +184,9 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
 
   const handleExportPDF = () => {
     if (!dossierFromDB) return;
+
     const realizedOnly = seances.filter((s) => isRealisee((s as any).etat_seance));
+
     const paymentStatusOverride =
       dossierFromDB.est_paye === null ? 'Non disponible' : undefined;
 
@@ -217,24 +218,21 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
     .reduce((sum, s) => sum + (s.montant_paye ?? 0), 0);
   const totalDu = (dossierFromDB?.prix_par_seance ?? 0) * seancesRealiseesCount;
 
-  // ✅ Désactiver "Programmer" si (réalisées + programmées) ≥ nombre_seances
   const programDisabled =
     (dossierFromDB?.nombre_seances ?? 0) > 0 &&
     seancesRealiseesCount + seancesProgrammeesCount >= (dossierFromDB?.nombre_seances ?? 0);
 
-  // Conflit réduction nb séances (vs réalisées)
   const isDownsizeConflict =
     isEditing &&
     editedDossier.nombre_seances !== undefined &&
     editedDossier.nombre_seances < seancesRealiseesCount;
 
-  // ✅ Dernière date programmée (pour la borne min de la date dans le modal de programmation)
   const lastProgrammedDateISO = useMemo(() => {
     const program = seances
       .filter(s => isProgrammee((s as any).etat_seance))
       .map(s => String(s.date_seance).slice(0,10));
     if (program.length === 0) return null;
-    return program.sort().at(-1)!; // max YYYY-MM-DD
+    return program.sort().at(-1)!;
   }, [seances]);
 
   const { todayISO: todayTunis } = nowInTunis();
@@ -325,7 +323,6 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
           </div>
         </div>
 
-        {/* Alerte réduction non autorisée */}
         {isDownsizeConflict && (
           <div className="flex items-start gap-3 p-3 rounded-lg border bg-red-50 border-red-200">
             <div className="p-2 rounded-lg bg-red-100 text-red-700">
@@ -381,7 +378,6 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             ) : (
-              // ✅ Afficher X/N (X = réalisées)
               <p className="font-medium text-gray-900">
                 {seancesRealiseesCount} / {dossierFromDB.nombre_seances}
               </p>
@@ -535,9 +531,7 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
             </div>
           </div>
         )}
-        {/* =====================  /DÉTAILS DU DOSSIER  ===================== */}
 
-        {/* Message d'erreur global */}
         {submitError && (
           <div className="text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2">
             {submitError}
@@ -612,6 +606,22 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
               const prog = isProgrammee(etat);
               const timeLabel = seance.heure_seance ? String(seance.heure_seance).slice(0, 5) : null;
 
+              // --- règles d'activation du bouton "Réaliser" (TZ Tunis)
+              const { todayISO, nowHHMM } = nowInTunis();
+              const keyNow = `${todayISO}T${nowHHMM}:00`;
+              const dateISO = String(seance.date_seance).slice(0, 10);
+              const timeHHMM = seance.heure_seance ? String(seance.heure_seance).slice(0,5) : '00:00';
+              const keySeance = `${dateISO}T${timeHHMM}:00`;
+              const isFuture = cmpKeys(keySeance, keyNow) > 0;
+              const isTodayTN = dateISO === todayISO;
+              const isAssignedToMe = seance.prestataire_id ? seance.prestataire_id === user?.id : true; // si non assignée, on autorise l’assistant courant
+
+              const canRealize =
+                prog && (
+                  (isAdmin && !isFuture) ||
+                  (!isAdmin && isAssignedToMe && isTodayTN && !isFuture)
+                );
+
               return (
                 <div
                   key={seance.id}
@@ -619,52 +629,30 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
                 >
                   {/* Actions (droite) */}
                   <div className="absolute top-2 right-2 flex gap-1">
-                    {prog && (
-                      <>
-                        {/* Réaliser — règles distinctes Admin vs Assistant (toujours en TZ Tunis) */}
-                        {(() => {
-                          const { todayISO, nowHHMM } = nowInTunis();
-                          const keyNow = `${todayISO}T${nowHHMM}:00`;
-                          const keySeance = toDateTimeKey(
-                            seance.date_seance as string,
-                            seance.heure_seance ? String(seance.heure_seance).slice(0,5) : '00:00'
-                          )!;
-                          const isFuture = cmpKeys(keySeance, keyNow) > 0;
-                          const isToday = String(seance.date_seance).slice(0,10) === todayISO;
-                          const assistantCanAct = isAssistant && isToday && !isFuture;
+                    {/* Réaliser (admin ou assistant selon règles ci-dessus) */}
+                    {canRealize && (
+                      <button
+                        onClick={() => setScheduledToRealize(seance)}
+                        className="p-2 rounded-lg transition text-emerald-700 hover:bg-emerald-50"
+                        title={
+                          isAdmin
+                            ? 'Enregistrer la réalisation'
+                            : 'Enregistrer (séance programmée d’aujourd’hui, horaire passé)'
+                        }
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                      </button>
+                    )}
 
-                          const enabled = isAdmin ? !isFuture : assistantCanAct;
-                          const title = isAdmin
-                            ? (isFuture ? 'Impossible de réaliser une séance future' : 'Enregistrer la réalisation')
-                            : (assistantCanAct
-                                ? 'Enregistrer la réalisation (passé d’aujourd’hui)'
-                                : 'Disponible quand l’horaire d’aujourd’hui est passé');
-
-                          return (
-                            <button
-                              onClick={() => enabled && setScheduledToRealize(seance)}
-                              disabled={!enabled}
-                              className={`p-2 rounded-lg transition ${
-                                enabled ? 'text-emerald-700 hover:bg-emerald-50' : 'text-gray-400 cursor-not-allowed'
-                              }`}
-                              title={title}
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                            </button>
-                          );
-                        })()}
-
-                        {/* Modifier / supprimer la programmée — admin seulement */}
-                        {isAdmin && (
-                          <button
-                            onClick={() => setScheduledToEdit(seance)}
-                            className="p-2 text-blue-700 hover:bg-blue-50 rounded-lg transition"
-                            title="Modifier / supprimer la séance programmée"
-                          >
-                            <Clock className="w-4 h-4" />
-                          </button>
-                        )}
-                      </>
+                    {/* Modifier / supprimer la programmée (admin) */}
+                    {isAdmin && prog && (
+                      <button
+                        onClick={() => setScheduledToEdit(seance)}
+                        className="p-2 text-blue-700 hover:bg-blue-50 rounded-lg transition"
+                        title="Modifier / supprimer la séance programmée"
+                      >
+                        <Clock className="w-4 h-4" />
+                      </button>
                     )}
 
                     {/* Éditer une séance réalisée (admin) */}
@@ -680,7 +668,6 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
                   </div>
 
                   <div className="flex items-start justify-between gap-3 sm:gap-4">
-                    {/* Colonne gauche */}
                     <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
                       <div className="w-10 h-10 sm:w-12 sm:h-12 bg-teal-100 rounded-full flex items-center justify-center font-semibold text-teal-700 shrink-0">
                         {seance.numero_seance}
@@ -731,7 +718,6 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
                       </div>
                     </div>
 
-                    {/* Colonne droite (montant) — NE RIEN AFFICHER pour programmée */}
                     {!prog && (
                       <div className="text-right">
                         <span className="block text-xs text-gray-600">Payé</span>
@@ -787,7 +773,7 @@ export default function DossierDetail({ dossier, patient, onBack }: DossierDetai
       {showProgram && dossierFromDB && (
         <ScheduleSeancesForDossierModal
           dossier={dossierFromDB}
-          // ✅ on fournit la min date à utiliser dans le <input type="date">
+          minDateISO={minDateForProgramming}
           onClose={() => setShowProgram(false)}
           onSuccess={async () => {
             setShowProgram(false);
@@ -853,11 +839,10 @@ function ModalPortal({ children }: { children: React.ReactNode }) {
 
 /* ==========================================================
    Modal d’ajout de séance (RÉALISÉE) — inline
-   Règles :
-   - TZ Africa/Tunis
-   - Assistants : date forcée à aujourd’hui (pas de jours passés), heures futures bloquées
-   - Admin : comme avant (min = dernière réalisée si existe, sinon aujourd’hui), pas de futur
-   - Blocage si des séances programmées existent
+   Correctifs :
+   - Assistants : jour = AUJOURD’HUI uniquement (min=max=today TN)
+   - Prix OBLIGATOIRE (pas de défaut 0)
+   - Bloque futur (TZ Tunis) comme avant
 ========================================================== */
 function AddSeanceInlineModal({
   dossier,
@@ -876,46 +861,42 @@ function AddSeanceInlineModal({
 }) {
   const { todayISO: todayTunis, curH, curM } = nowInTunis();
 
-  // bornes (dernière réalisée)
-  const [lastRealDate, setLastRealDate] = useState<string | null>(null); // "YYYY-MM-DD"
-  const [lastRealTime, setLastRealTime] = useState<string | null>(null); // "HH:MM"
+  const [lastRealDate, setLastRealDate] = useState<string | null>(null);
+  const [lastRealTime, setLastRealTime] = useState<string | null>(null);
   const [minDateISO, setMinDateISO] = useState<string>(todayTunis);
   const [sameDayMinTime, setSameDayMinTime] = useState<{ hh: string; mm: string } | null>(null);
 
-  // choix utilisateur
   const [dateSeance, setDateSeance] = useState<string>(todayTunis);
-  const [hour, setHour] = useState<string>('08'); // HH
-  const [minute, setMinute] = useState<string>('00'); // MM
-  const [duree, setDuree] = useState<string>(''); // minutes (optionnel)
+  const [hour, setHour] = useState<string>('08');
+  const [minute, setMinute] = useState<string>('00');
+  const [duree, setDuree] = useState<string>('');
 
   const [prestataireId, setPrestataireId] = useState<string>(currentUserId);
-  const [montantPaye, setMontantPaye] = useState<string>('0');
+  const [montantPaye, setMontantPaye] = useState<string>(''); // ← REQUIRED
   const [note, setNote] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<UserBase[]>([]);
   const [error, setError] = useState<string>('');
 
-  // ✅ État + chargement du nombre de programmées
   const [scheduledCount, setScheduledCount] = useState<number>(0);
   useEffect(() => {
     (async () => {
-      const { count, data, error } = await supabase
+      const { count, data } = await supabase
         .from('seances')
         .select('id', { count: 'exact', head: true })
         .eq('dossier_id', dossier.id)
         .in('etat_seance', ['programmée', 'programmee'] as any);
 
-      if (!error) setScheduledCount(typeof count === 'number' ? count : (data?.length ?? 0));
+      if (typeof count === 'number') setScheduledCount(count);
+      else setScheduledCount(data?.length ?? 0);
     })();
   }, [dossier.id]);
 
-  // Heures dispo 08 → 20
   const hoursOptions = useMemo(
     () => Array.from({ length: 13 }, (_, i) => (8 + i).toString().padStart(2, '0')),
     []
   );
 
-  // Charger prestataires + dernière séance RÉALISÉE
   useEffect(() => {
     (async () => {
       if (isAdmin) {
@@ -936,43 +917,27 @@ function AddSeanceInlineModal({
         const t = last[0].heure_seance ? String(last[0].heure_seance).slice(0, 5) : '00:00';
         setLastRealDate(d);
         setLastRealTime(t);
-
-        // 🔧 Différenciation Admin vs Assistant pour la borne min de date
-        if (isAdmin) {
-          // Admin : pas de jours < dernière réalisée
-          setMinDateISO(d);
-          setSameDayMinTime({ hh: t.slice(0, 2), mm: t.slice(3, 5) });
-          setDateSeance((prev) => (prev < d ? d : prev));
-        } else {
-          // Assistant : toujours aujourd’hui
-          setMinDateISO(todayTunis);
-          setDateSeance(todayTunis);
-          setSameDayMinTime(null);
-        }
+        setMinDateISO(isAdmin ? d : todayTunis); // assistants restent sur aujourd’hui
+        setSameDayMinTime({ hh: t.slice(0, 2), mm: t.slice(3, 5) });
+        setDateSeance((prev) => {
+          const base = isAdmin ? (prev < d ? d : prev) : todayTunis;
+          return base;
+        });
       } else {
-        // Aucune réalisée
-        if (isAdmin) {
-          setMinDateISO(todayTunis);
-          setDateSeance((prev) => (prev < todayTunis ? todayTunis : prev));
-        } else {
-          setMinDateISO(todayTunis);
-          setDateSeance(todayTunis);
-        }
+        setMinDateISO(isAdmin ? todayTunis : todayTunis);
+        setDateSeance(todayTunis);
       }
     })();
   }, [dossier.id, isAdmin, todayTunis]);
 
-  // Si même jour que la dernière : on impose l'heure minimale (pas les minutes) — Admin uniquement
   useEffect(() => {
-    if (!isAdmin) return;
     if (!sameDayMinTime || !lastRealDate) return;
     if (dateSeance !== lastRealDate) return;
     if (Number(hour) < Number(sameDayMinTime.hh)) {
       setHour(sameDayMinTime.hh);
     }
-  }, [dateSeance, hour, lastRealDate, sameDayMinTime, isAdmin]);
+  }, [dateSeance, hour, lastRealDate, sameDayMinTime]);
 
-  // Si aujourd’hui (Tunis) : désactiver heures > actuelles + clamp minutes si même heure
   const isTodayTN = dateSeance === todayTunis;
 
   const getNextSeanceNumber = async (dossierId: string) => {
@@ -986,8 +951,7 @@ function AddSeanceInlineModal({
     return data && data.length > 0 ? data[0].numero_seance + 1 : 1;
   };
 
-  // Calcul d’une éventuelle erreur de minute (même jour + même heure + minute < borne) — Admin uniquement
-  const sameDay = isAdmin && lastRealDate && dateSeance === lastRealDate;
+  const sameDay = lastRealDate && dateSeance === lastRealDate;
   const minuteNum = Number((minute || '').replace(/[^\d]/g, ''));
   const minMinuteNum = sameDayMinTime ? Number(sameDayMinTime.mm) : 0;
   const minuteInvalidVSLast =
@@ -996,7 +960,6 @@ function AddSeanceInlineModal({
     hour === sameDayMinTime!.hh &&
     (isNaN(minuteNum) || minuteNum < minMinuteNum);
 
-  // Clamp minutes si aujourd’hui & même heure courante
   useEffect(() => {
     if (isTodayTN && Number(hour) === curH) {
       const mm = Number(minute || '0');
@@ -1007,15 +970,31 @@ function AddSeanceInlineModal({
   const handleSubmit = async () => {
     setError('');
 
-    // 🔒 Re-vérifier les séances programmées
+    // 🔒 blocage assistants : uniquement aujourd’hui
+    if (!isAdmin && dateSeance !== todayTunis) {
+      setError('En tant qu’assistant, vous ne pouvez ajouter une séance réalisée que pour aujourd’hui.');
+      return;
+    }
+
+    // Prix obligatoire
+    if (montantPaye.trim() === '') {
+      setError('Le montant payé est obligatoire.');
+      return;
+    }
+    const montant = Number(montantPaye);
+    if (Number.isNaN(montant) || montant < 0) {
+      setError('Montant payé invalide (≥ 0).');
+      return;
+    }
+
     {
-      const { count, data, error } = await supabase
+      const { count, data } = await supabase
         .from('seances')
         .select('id', { count: 'exact', head: true })
         .eq('dossier_id', dossier.id)
         .in('etat_seance', ['programmée', 'programmee'] as any);
 
-      const nbProg = !error ? (typeof count === 'number' ? count : (data?.length ?? 0)) : 0;
+      const nbProg = typeof count === 'number' ? count : (data?.length ?? 0);
       if (nbProg > 0) {
         setError(
           `Impossible d’ajouter une séance réalisée : ${nbProg} séance(s) programmée(s) existent pour ce dossier. ` +
@@ -1025,7 +1004,6 @@ function AddSeanceInlineModal({
       }
     }
 
-    // Règle globale “> dernière réalisée” (pour l’ordre chronologique)
     const mmSane = (minute || '00').replace(/[^\d]/g, '').slice(0, 2);
     const chosenKey = toDateTimeKey(dateSeance, `${hour}:${mmSane.padStart(2, '0')}`);
     const lastKey = lastRealDate ? toDateTimeKey(lastRealDate, lastRealTime || '00:00') : null;
@@ -1035,19 +1013,11 @@ function AddSeanceInlineModal({
       return;
     }
 
-    // ⛔ pas de date future
     if (dateSeance > todayTunis) {
       setError('Date future non autorisée pour une séance réalisée.');
       return;
     }
 
-    // 🔒 Assistants : pas de jours passés — seulement aujourd’hui
-    if (!isAdmin && dateSeance !== todayTunis) {
-      setError('En tant qu’assistant, vous ne pouvez ajouter une séance réalisée que pour aujourd’hui.');
-      return;
-    }
-
-    // ⛔ pas d’heure future si aujourd’hui (TZ Tunis)
     if (dateSeance === todayTunis) {
       const { nowHHMM } = nowInTunis();
       const keyNow = `${todayTunis}T${nowHHMM}:00`;
@@ -1057,14 +1027,12 @@ function AddSeanceInlineModal({
       }
     }
 
-    // Minutes 0..59
     const mmNum = Number(mmSane);
     if (Number.isNaN(mmNum) || mmNum < 0 || mmNum > 59) {
       setError('Minutes invalides (0–59).');
       return;
     }
 
-    // Validation locale minutes (même jour + même heure vs dernière RÉALISÉE) — Admin uniquement
     if (minuteInvalidVSLast) {
       setError(
         `Minutes trop petites. Minimum requis: ${sameDayMinTime!.hh}:${sameDayMinTime!.mm} pour ce jour.`
@@ -1072,13 +1040,11 @@ function AddSeanceInlineModal({
       return;
     }
 
-    // Si aujourd’hui et même heure courante, minutes ≤ courantes
     if (isTodayTN && Number(hour) === curH && mmNum > curM) {
       setError(`Minutes trop grandes pour aujourd’hui. Maximum: ${String(curM).padStart(2,'0')}.`);
       return;
     }
 
-    // Durée (optionnelle) ≥ 0
     const dureeNum = duree === '' ? null : Number(duree);
     if (dureeNum !== null && (Number.isNaN(dureeNum) || dureeNum < 0)) {
       setError('Durée invalide (minutes ≥ 0).');
@@ -1096,9 +1062,9 @@ function AddSeanceInlineModal({
         date_seance: dateSeance,
         heure_seance: heure,
         duree_minutes: dureeNum,
-        prestataire_id: prestataireId,
+        prestataire_id: isAdmin ? prestataireId : currentUserId,
         etat_seance: 'réalisée',
-        montant_paye: parseFloat(montantPaye) || 0,
+        montant_paye: montant,
         note: note || null,
       });
 
@@ -1111,7 +1077,7 @@ function AddSeanceInlineModal({
     }
   };
 
-  const isSameDayAsLast = isAdmin && lastRealDate && dateSeance === lastRealDate;
+  const isSameDayAsLast = lastRealDate && dateSeance === lastRealDate;
 
   return (
     <ModalPortal>
@@ -1130,7 +1096,7 @@ function AddSeanceInlineModal({
           <p className="text-gray-700">
             <span className="font-medium">Dossier :</span> {dossier.motif}
           </p>
-          {isAdmin && lastRealDate && (
+          {lastRealDate && (
             <p className="text-gray-700 mt-1">
               <span className="font-medium">Dernière réalisée :</span>{' '}
               {new Date(lastRealDate).toLocaleDateString('fr-FR')}
@@ -1139,7 +1105,6 @@ function AddSeanceInlineModal({
           )}
         </div>
 
-        {/* ✅ Alerte : séances programmées en attente */}
         {scheduledCount > 0 && (
           <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded text-sm">
             Ce dossier comporte <b>{scheduledCount}</b> séance(s) programmée(s).<br />
@@ -1148,7 +1113,6 @@ function AddSeanceInlineModal({
         )}
 
         <div className="space-y-3">
-          {/* Date */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Date de séance</label>
             <input
@@ -1156,11 +1120,7 @@ function AddSeanceInlineModal({
               value={dateSeance}
               onChange={(e) => {
                 const v = e.target.value;
-                // Admin : clamp entre minDateISO et aujourd’hui
-                // Assistant : forcer aujourd’hui
-                const fixed = isAdmin
-                  ? (v < minDateISO ? minDateISO : (v > todayTunis ? todayTunis : v))
-                  : todayTunis;
+                const fixed = isAdmin ? (v < minDateISO ? minDateISO : (v > todayTunis ? todayTunis : v)) : todayTunis;
                 setDateSeance(fixed);
                 if (fixed === todayTunis && Number(hour) > curH) {
                   setHour(String(curH).padStart(2,'0'));
@@ -1171,19 +1131,11 @@ function AddSeanceInlineModal({
               }}
               min={isAdmin ? minDateISO : todayTunis}
               max={todayTunis}
-              disabled={!isAdmin} // 🔒 assistants : seulement aujourd’hui
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 disabled:bg-gray-100"
+              disabled={!isAdmin} // assistants: aujourd’hui uniquement
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              {isAdmin
-                ? (lastRealDate
-                    ? "Les jours avant la dernière séance réalisée sont désactivés. Pas de future date."
-                    : "Pas de future date autorisée.")
-                : "En tant qu’assistant, vous pouvez ajouter uniquement pour aujourd’hui."}
-            </p>
           </div>
 
-          {/* Heure / Minutes / Durée */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Heure</label>
@@ -1191,13 +1143,9 @@ function AddSeanceInlineModal({
                 value={hour}
                 onChange={(e) => {
                   let h = e.target.value;
-                  if (dateSeance === todayTunis && Number(h) > curH) h = String(curH).padStart(2,'0');
-                  // Admin : si même jour que la dernière, pas avant son heure mini
-                  if (isAdmin && isSameDayAsLast && sameDayMinTime && Number(h) < Number(sameDayMinTime.hh)) {
-                    h = sameDayMinTime.hh;
-                  }
+                  if (isTodayTN && Number(h) > curH) h = String(curH).padStart(2,'0');
                   setHour(h);
-                  if (dateSeance === todayTunis && Number(h) === curH && Number(minute) > curM) {
+                  if (isTodayTN && Number(h) === curH && Number(minute) > curM) {
                     setMinute(String(curM).padStart(2,'0'));
                   }
                 }}
@@ -1208,7 +1156,7 @@ function AddSeanceInlineModal({
                   const disabledByLast =
                     isAdmin && isSameDayAsLast && sameDayMinTime && Number(h) < Number(sameDayMinTime.hh);
                   const disabledByNow =
-                    dateSeance === todayTunis && Number(h) > curH;
+                    isTodayTN && Number(h) > curH;
                   return (
                     <option key={h} value={h} disabled={!!disabledByLast || !!disabledByNow}>
                       {h}
@@ -1216,15 +1164,8 @@ function AddSeanceInlineModal({
                   );
                 })}
               </select>
-              {isAdmin && isSameDayAsLast && sameDayMinTime && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Heure ≥ {sameDayMinTime.hh}:{sameDayMinTime.mm}
-                </p>
-              )}
-              {dateSeance === todayTunis && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Pour aujourd’hui, l’heure doit être ≤ {String(curH).padStart(2,'0')}:{String(curM).padStart(2,'0')}.
-                </p>
+              {isTodayTN && (
+                <p className="text-xs text-gray-500 mt-1">Pour aujourd’hui, l’heure doit être ≤ {String(curH).padStart(2,'0')}:{String(curM).padStart(2,'0')}.</p>
               )}
             </div>
             <div>
@@ -1236,26 +1177,12 @@ function AddSeanceInlineModal({
                   let n = Number(clean || '0');
                   if (Number.isNaN(n)) n = 0;
                   if (n > 59) n = 59;
-                  // Aujourd’hui & même heure courante : minutes ≤ courantes
-                  if (dateSeance === todayTunis && Number(hour) === curH && n > curM) n = curM;
-                  // Admin & même jour que la dernière & heure égale à son min -> minutes ≥ min
-                  if (isAdmin && isSameDayAsLast && sameDayMinTime && hour === sameDayMinTime.hh && n < Number(sameDayMinTime.mm)) {
-                    n = Number(sameDayMinTime.mm);
-                  }
+                  if (isTodayTN && Number(hour) === curH && n > curM) n = curM;
                   setMinute(String(n).padStart(2,'0'));
                 }}
                 placeholder="MM"
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 ${
-                  isAdmin && minuteInvalidVSLast
-                    ? 'border-red-300 focus:ring-red-200'
-                    : 'border-gray-300 focus:ring-teal-500'
-                }`}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
               />
-              {isAdmin && minuteInvalidVSLast && sameDayMinTime && (
-                <p className="text-xs text-red-600 mt-1">
-                  Minimum: {sameDayMinTime.hh}:{sameDayMinTime.mm} pour ce jour.
-                </p>
-              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Durée (min)</label>
@@ -1268,7 +1195,6 @@ function AddSeanceInlineModal({
             </div>
           </div>
 
-          {/* Prestataire */}
           {isAdmin ? (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Prestataire</label>
@@ -1296,12 +1222,13 @@ function AddSeanceInlineModal({
             </div>
           )}
 
-          {/* Paiement & note */}
+          {/* Prix OBLIGATOIRE */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Montant payé (DT)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Montant payé (DT) *</label>
             <input
               type="number"
               step="0.01"
+              required
               value={montantPaye}
               onChange={(e) => setMontantPaye(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
@@ -1335,7 +1262,7 @@ function AddSeanceInlineModal({
             </button>
             <button
               onClick={handleSubmit}
-              disabled={loading || (isAdmin && minuteInvalidVSLast) || scheduledCount > 0}
+              disabled={loading || minuteInvalidVSLast || scheduledCount > 0}
               className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition disabled:opacity-50"
             >
               {loading ? 'Enregistrement…' : 'Valider la réalisation'}
@@ -1349,7 +1276,10 @@ function AddSeanceInlineModal({
 
 /* ==========================================================
    Modal de réalisation d’une séance programmée
-   (inchangé fonctionnellement — les droits d’accès sont gérés au niveau de l’icône)
+   Correctifs :
+   - Assistants : mise à jour effective, prestataire = currentUserId
+   - Prix OBLIGATOIRE
+   - Toujours TZ Africa/Tunis + contrôles d’ordre
 ========================================================== */
 function RealizeScheduledInlineModal({
   seance,
@@ -1367,7 +1297,7 @@ function RealizeScheduledInlineModal({
   onSuccess: () => void;
 }) {
   const [prestataireId, setPrestataireId] = useState<string>(seance.prestataire_id || currentUserId);
-  const [montantPaye, setMontantPaye] = useState<string>(String(seance.montant_paye ?? 0));
+  const [montantPaye, setMontantPaye] = useState<string>(''); // ← REQUIRED
   const [note, setNote] = useState<string>(seance.note || '');
   const [users, setUsers] = useState<UserBase[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1392,6 +1322,8 @@ function RealizeScheduledInlineModal({
   )!;
   const isFuture = cmpKeys(keySeance, keyNow) > 0;
 
+  const isTodayTN = String(seance.date_seance).slice(0,10) === todayISO;
+
   const handleSubmit = async () => {
     setErr('');
     setLastErr('');
@@ -1399,6 +1331,26 @@ function RealizeScheduledInlineModal({
     try {
       if (isFuture) {
         setErr("Impossible de réaliser une séance programmée dans le futur.");
+        setLoading(false);
+        return;
+      }
+
+      // Assistants : uniquement aujourd’hui
+      if (!isAdmin && !isTodayTN) {
+        setErr("En tant qu’assistant, vous ne pouvez réaliser qu’une séance programmée d’aujourd’hui.");
+        setLoading(false);
+        return;
+      }
+
+      // Prix obligatoire
+      if (montantPaye.trim() === '') {
+        setErr('Le montant payé est obligatoire.');
+        setLoading(false);
+        return;
+      }
+      const montant = Number(montantPaye);
+      if (Number.isNaN(montant) || montant < 0) {
+        setErr('Montant payé invalide (≥ 0).');
         setLoading(false);
         return;
       }
@@ -1436,12 +1388,13 @@ function RealizeScheduledInlineModal({
         .from('seances')
         .update({
           etat_seance: 'réalisée',
-          prestataire_id: prestataireId,
-          montant_paye: parseFloat(montantPaye) || 0,
+          prestataire_id: isAdmin ? prestataireId : currentUserId,
+          montant_paye: Number(montantPaye),
           note: note || null,
         })
         .eq('id', seance.id);
       if (error) throw error;
+
       onSuccess();
     } catch (e: any) {
       setErr(e?.message || "Impossible d'enregistrer la réalisation.");
@@ -1470,23 +1423,40 @@ function RealizeScheduledInlineModal({
         </div>
 
         <div className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Prestataire</label>
-            <select
-              value={prestataireId}
-              onChange={(e) => setPrestataireId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 bg-white"
-            >
-              {/* Si non admin, on garde l’utilisateur courant en tête */}
-              <option value={prestataireId}>Vous</option>
-            </select>
-          </div>
+          {isAdmin ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Prestataire</label>
+              <select
+                value={prestataireId}
+                onChange={(e) => setPrestataireId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 bg-white"
+              >
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.prenom} {u.nom}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Prestataire</label>
+              <input
+                type="text"
+                value="Vous"
+                disabled
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-600"
+              />
+            </div>
+          )}
 
+          {/* Prix OBLIGATOIRE */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Montant payé (DT)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Montant payé (DT) *</label>
             <input
               type="number"
               step="0.01"
+              required
               value={montantPaye}
               onChange={(e) => setMontantPaye(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500"
