@@ -368,7 +368,7 @@ export default function EditScheduledSeanceModal({
       <div className="bg-white rounded-xl w-full max-w-md p-6 space-y-4 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold text-gray-900">
-            Modifier la séance programmée #{seance.numero_seance}
+            Modifier la séance programmée numéro{seance.numero_seance}
           </h3>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100" title="Fermer">
             <X className="w-5 h-5" />
@@ -537,7 +537,7 @@ export default function EditScheduledSeanceModal({
               </h4>
             </div>
             <p className="text-sm text-gray-700">
-              Vous êtes sur le point de supprimer la <b>séance programmée #{seance.numero_seance}</b>.
+              Vous êtes sur le point de supprimer la <b>séance programmée numéro{seance.numero_seance}</b>.
               Cette action <b>réindexera automatiquement</b> les numéros des séances programmées
               suivantes du même dossier.
             </p>
