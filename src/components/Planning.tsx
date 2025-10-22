@@ -484,77 +484,142 @@ export default function Planning({
   ) => setRealizeFromScheduled(s);
 
   // Export PDF (programmées)
-  const handleExportProgramméesPDF = async () => {
-    if (pdfFrom > pdfTo || pdfFrom < todayStr) {
-      alert("Veuillez choisir une plage valide (à partir d’aujourd’hui).");
+ // ⬇️ Remplacez TOUTE la fonction handleExportProgramméesPDF par ceci
+const handleExportProgramméesPDF = async () => {
+  if (pdfFrom > pdfTo || pdfFrom < todayStr) {
+    alert("Veuillez choisir une plage valide (à partir d’aujourd’hui).");
+    return;
+  }
+
+  // 1) Charger UNIQUEMENT les champs bruts de la table seances (pas de relations)
+  let q = supabase
+    .from("seances")
+    .select("id, date_seance, heure_seance, note, prestataire_id, dossier_id")
+    .in("etat_seance", ["programmée", "programmee"] as any)
+    .gte("date_seance", pdfFrom)
+    .lte("date_seance", pdfTo)
+    .order("date_seance", { ascending: true })
+    .order("heure_seance", { ascending: true });
+
+  // Assistants : limiter à leurs propres séances
+  if (userBase?.type_utilisateur !== "admin") {
+    q = q.eq("prestataire_id", user?.id ?? "");
+  }
+
+  const { data: seances, error: seErr } = await q;
+  if (seErr) {
+    alert(seErr.message || "Erreur lors du chargement des séances.");
+    return;
+  }
+  if (!seances || seances.length === 0) {
+    alert("Aucune séance à exporter pour cette période.");
+    return;
+  }
+
+  // 2) Charger les dossiers concernés (du client courant), puis les patients
+  const dossierIds = Array.from(new Set(seances.map(s => s.dossier_id).filter(Boolean)));
+  const { data: dossiers, error: dErr } = await supabase
+    .from("dossiers_soins")
+    .select("id, motif, patient_id, client_id")
+    .in("id", dossierIds)
+    .eq("client_id", userBase?.client_id ?? "");
+  if (dErr) {
+    alert(dErr.message || "Erreur chargement des dossiers.");
+    return;
+  }
+  const dossiersById = new Map(dossiers.map(d => [d.id, d]));
+
+  const patientIds = Array.from(new Set(dossiers.map(d => d.patient_id).filter(Boolean)));
+  let patientsById = new Map<string, any>();
+  if (patientIds.length > 0) {
+    const { data: patients, error: pErr } = await supabase
+      .from("patients")
+      .select("id, nom, prenom")
+      .in("id", patientIds);
+    if (pErr) {
+      alert(pErr.message || "Erreur chargement des patients.");
       return;
     }
-    const { data, error } = await supabase
-      .from("seances")
-      .select("*, users_base(id, nom, prenom), dossiers_soins(id, motif), patients(*)")
-      .in("etat_seance", ["programmée", "programmee"] as any)
-      .gte("date_seance", pdfFrom)
-      .lte("date_seance", pdfTo)
-      .order("date_seance", { ascending: true })
-      .order("heure_seance", { ascending: true });
-    if (error) {
-      alert(error.message || "Erreur lors du chargement des séances.");
+    patientsById = new Map(patients.map(p => [p.id, p]));
+  }
+
+  // 3) Charger les prestataires affichés dans le PDF
+  const prestataireIds = Array.from(new Set(seances.map(s => s.prestataire_id).filter(Boolean)));
+  let prestasById = new Map<string, any>();
+  if (prestataireIds.length > 0) {
+    const { data: prestas, error: prErr } = await supabase
+      .from("users_base")
+      .select("id, nom, prenom")
+      .in("id", prestataireIds);
+    if (prErr) {
+      alert(prErr.message || "Erreur chargement des prestataires.");
       return;
     }
-    const rowsSel = (data || []).filter((s: any) => (isAdmin ? true : s.prestataire_id === user?.id));
+    prestasById = new Map(prestas.map(u => [u.id, u]));
+  }
 
-    const doc = new jsPDF({ orientation: "landscape" });
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const title = "Séances programmées";
-    doc.setFontSize(16);
-    doc.text(title, pageWidth / 2, 14, { align: "center" });
-    doc.setFontSize(10);
-    doc.text(
-      `Période: ${new Date(pdfFrom).toLocaleDateString("fr-FR")} → ${new Date(pdfTo).toLocaleDateString("fr-FR")}`,
-      pageWidth / 2,
-      20,
-      { align: "center" }
-    );
+  // 4) Construire le tableau pour le PDF
+  const body = seances.map((s) => {
+    const dossier = dossiersById.get(s.dossier_id);
+    const patient = dossier ? patientsById.get(dossier.patient_id) : null;
+    const presta = s.prestataire_id ? prestasById.get(s.prestataire_id) : null;
 
-    const body = rowsSel.map((s: any) => [
+    return [
       new Date(s.date_seance).toLocaleDateString("fr-FR"),
       s.heure_seance ? String(s.heure_seance).slice(0, 5) : "—",
-      s.patients ? `${s.patients.prenom} ${s.patients.nom}` : "-",
-      s.dossiers_soins ? s.dossiers_soins.motif : "-",
-      s.users_base ? `${s.users_base.prenom} ${s.users_base.nom}` : "-",
+      patient ? `${patient.prenom} ${patient.nom}` : "-",
+      dossier ? dossier.motif : "-",
+      presta ? `${presta.prenom} ${presta.nom}` : "-",
       s.note || "-",
-    ]);
+    ];
+  });
 
-    autoTable(doc, {
-      startY: 26,
-      head: [["Date", "Heure", "Patient", "Motif", "Prestataire", "Note"]],
-      body,
-      theme: "grid",
-      headStyles: { fillColor: [13, 148, 136] },
-      styles: { fontSize: 9 },
-      columnStyles: { 5: { cellWidth: 60 } },
-    });
+  // 5) Export paysage
+  const doc = new jsPDF({ orientation: "landscape" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
 
-    // Footer: date de Tunis
-    const tunis = new Intl.DateTimeFormat("fr-FR", {
-      timeZone: "Africa/Tunis",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    }).format(new Date());
-    const pageHeight = doc.internal.pageSize.getHeight();
-    doc.setFontSize(8);
-    doc.setTextColor(120);
-    doc.text(`Téléchargé le ${tunis} (heure de Tunis)`, pageWidth / 2, pageHeight - 6, {
-      align: "center",
-    });
+  doc.setFontSize(16);
+  doc.text("Séances programmées", pageWidth / 2, 14, { align: "center" });
+  doc.setFontSize(10);
+  doc.text(
+    `Période: ${new Date(pdfFrom).toLocaleDateString("fr-FR")} → ${new Date(pdfTo).toLocaleDateString("fr-FR")}`,
+    pageWidth / 2,
+    20,
+    { align: "center" }
+  );
 
-    const fileName = `programmees_${pdfFrom}_au_${pdfTo}.pdf`;
-    doc.save(fileName);
-  };
+  autoTable(doc, {
+    startY: 26,
+    head: [["Date", "Heure", "Patient", "Motif", "Prestataire", "Note"]],
+    body,
+    theme: "grid",
+    headStyles: { fillColor: [13, 148, 136] },
+    styles: { fontSize: 9 },
+    columnStyles: { 5: { cellWidth: 60 } },
+  });
+
+  // Footer : heure de Tunis
+  const tunis = new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Africa/Tunis",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date());
+
+  doc.setFontSize(8);
+  doc.setTextColor(120);
+  doc.text(`Téléchargé le ${tunis} (heure de Tunis)`, pageWidth / 2, pageHeight - 6, {
+    align: "center",
+  });
+
+  const fileName = `programmees_${pdfFrom}_au_${pdfTo}.pdf`;
+  doc.save(fileName);
+};
+
 
   return (
     <div className="space-y-4">
