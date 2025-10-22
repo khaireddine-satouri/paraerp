@@ -32,6 +32,7 @@ export interface Patient {
   nom: string;
   prenom: string;
   telephone: string;
+  telephone_2?: string | null;
   photo_url: string | null;     // URL publique (pour l’affichage)
   photo_path?: string | null;   // ✅ chemin storage (ex: "patientId/xxx.jpg")
   client_id: string | null;
