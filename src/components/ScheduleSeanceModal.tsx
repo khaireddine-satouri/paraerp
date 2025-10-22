@@ -4,14 +4,56 @@ import { supabase, Patient, DossierSoin, UserBase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { X, Search, Clock } from "lucide-react";
 
+/* ----------------- Helpers fuseau Africa/Tunis ----------------- */
+function pad2(n: number | string) {
+  return String(n).padStart(2, "0");
+}
+
+/** Renvoie la date/heure “maintenant” dans le fuseau Africa/Tunis */
+function getTunisNow() {
+  const tz = "Africa/Tunis";
+  const fmt = new Intl.DateTimeFormat("fr-TN", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const get = (t: Intl.DateTimeFormatPartTypes) =>
+    fmt.find((p) => p.type === t)?.value ?? "00";
+
+  const yyyy = get("year");
+  const mm = get("month");
+  const dd = get("day");
+  const hh = get("hour");
+  const mi = get("minute");
+
+  const todayISO = `${yyyy}-${mm}-${dd}`;
+  const nowKey = `${todayISO}T${hh}:${mi}:00`;
+  return { todayISO, hh, mi, nowKey };
+}
+
+function keyFrom(dateISO: string, hh: string, mm: string) {
+  return `${dateISO}T${pad2(hh)}:${pad2(mm)}:00`;
+}
+function parseKey(k: string) {
+  return new Date(k);
+}
+function addMinutesToHHMM(hhmm: string, plus: number) {
+  const [h, m] = hhmm.split(":").map((x) => parseInt(x || "0", 10));
+  const d = new Date(2000, 0, 1, h, m, 0);
+  d.setMinutes(d.getMinutes() + plus);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+/* --------------------------------------------------------------- */
+
 type Props = {
-  /** date pré-sélectionnée "YYYY-MM-DD" (optionnelle) */
-  defaultDate?: string;
-  /** heure pré-sélectionnée (HH) optionnelle (ex: "14") */
-  defaultHour?: string;
-  /** callback fermeture */
+  defaultDate?: string;   // "YYYY-MM-DD"
+  defaultHour?: string;   // "HH"
   onClose: () => void;
-  /** callback succès */
   onSuccess: () => void;
 };
 
@@ -24,13 +66,12 @@ export default function ScheduleSeanceModal({
   const { user, userBase } = useAuth();
   const isAdmin = userBase?.type_utilisateur === "admin";
 
-  // Sélection patient/dossier
+  // Recherche patient
   const [patients, setPatients] = useState<Patient[]>([]);
   const [dossiers, setDossiers] = useState<DossierSoin[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [selectedDossier, setSelectedDossier] = useState<DossierSoin | null>(null);
 
-  // Recherche patient
   const [q, setQ] = useState("");
   const filteredPatients = useMemo(() => {
     const term = q.trim().toLowerCase();
@@ -55,21 +96,13 @@ export default function ScheduleSeanceModal({
     });
   }, [q, patients]);
 
-  // Helpers temps
-  const pad2 = (n: number | string) => String(n).padStart(2, "0");
-  const keyFrom = (d: string, hh: string, mm: string) => `${d}T${pad2(hh)}:${pad2(mm)}:00`;
-
-  const now = new Date();
-  const todayISO = now.toISOString().split("T")[0];
-  const nowHH = pad2(now.getHours());
-  const nowMM = pad2(now.getMinutes());
-  const nowKey = keyFrom(todayISO, nowHH, nowMM);
+  // ---- Référence “aujourd’hui / maintenant” en Africa/Tunis
+  const tunisNow = useMemo(() => getTunisNow(), []);
+  const [dateSeance, setDateSeance] = useState<string>(defaultDate || tunisNow.todayISO);
+  const [minDateISO, setMinDateISO] = useState<string>(tunisNow.todayISO); // max(aujourd'hui-Tunis, lastReal, lastProgDate)
+  const [lastScheduledKey, setLastScheduledKey] = useState<string | null>(null); // YYYY-MM-DDTHH:MM:00 (pour borne si même jour)
 
   // Form champs
-  const today = useMemo(() => new Date().toISOString().split("T")[0], []);
-  const [dateSeance, setDateSeance] = useState<string>(defaultDate || today);
-  const [minDateISO, setMinDateISO] = useState<string>(today); // ⬅️ max(today, lastRealized, lastScheduledDate)
-  const [lastScheduledKey, setLastScheduledKey] = useState<string | null>(null); // "YYYY-MM-DDTHH:MM:00" pour contrôle horaire égal-jour
   const [hour, setHour] = useState<string>(defaultHour || "08");
   const [minute, setMinute] = useState<string>("00");
   const [duree, setDuree] = useState<string>("");
@@ -84,11 +117,9 @@ export default function ScheduleSeanceModal({
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string>("");
 
-  const hoursOptions = Array.from({ length: 13 }, (_, i) => 8 + i).map((h) =>
-    h.toString().padStart(2, "0")
-  ); // 08..20
+  const hoursOptions = Array.from({ length: 13 }, (_, i) => pad2(8 + i)); // 08..20
 
-  // ---- Charger patients & prestataires
+  // Charger patients & prestataires
   useEffect(() => {
     (async () => {
       const { data: pts } = await supabase
@@ -109,7 +140,7 @@ export default function ScheduleSeanceModal({
     })();
   }, [isAdmin, userBase?.client_id]);
 
-  // ---- Charger dossiers en cours du patient sélectionné
+  // Charger dossiers en cours du patient sélectionné
   useEffect(() => {
     (async () => {
       if (!selectedPatient) {
@@ -137,13 +168,13 @@ export default function ScheduleSeanceModal({
     })();
   }, [selectedPatient, userBase?.client_id]);
 
-  // ---- minDate = max(today, dernière RÉALISÉE, dernière PROGRAMMÉE (partie date)) + renseigner lastScheduledKey
+  // minDate = max(aujourd’hui-Tunis, dernière RÉALISÉE, dernière PROGRAMMÉE (partie date))
   useEffect(() => {
     (async () => {
       setSubmitError("");
       setLastScheduledKey(null);
 
-      const baseMin = today;
+      const baseMin = tunisNow.todayISO;
       if (!selectedDossier) {
         setMinDateISO(baseMin);
         setDateSeance((prev) => (prev < baseMin ? baseMin : prev));
@@ -158,10 +189,9 @@ export default function ScheduleSeanceModal({
         .in("etat_seance", ["réalisée", "realisee"])
         .order("date_seance", { ascending: false })
         .limit(1);
+      const lastRealDate = lastReal && lastReal.length ? String(lastReal[0].date_seance) : null;
 
-      const lastRealDate = lastReal && lastReal.length ? (lastReal[0].date_seance as string) : null;
-
-      // dernière PROGRAMMÉE (date + heure → key complète)
+      // dernière PROGRAMMÉE (date + heure pour contrôle horaire)
       const { data: lastProg } = await supabase
         .from("seances")
         .select("date_seance, heure_seance")
@@ -185,74 +215,87 @@ export default function ScheduleSeanceModal({
       setMinDateISO(min);
       setDateSeance((prev) => (prev < min ? min : prev));
     })();
-  }, [selectedDossier, today]);
+  }, [selectedDossier, tunisNow.todayISO]);
 
-  // ---- Sanitize inputs
-  const onMinuteChange = (v: string) => setMinute(v.replace(/[^\d]/g, "").slice(0, 2));
-  const onDureeChange = (v: string) => setDuree(v.replace(/[^\d]/g, "").slice(0, 4));
+  // -------- Auto-clamp HH:MM si la date = aujourd’hui (Tunis) et/ou même jour que dernière programmée --------
+  /** Renvoie la borne HH:MM minimale à respecter pour la date courante */
+  const getMinHHMMForCurrentDate = (): string | null => {
+    let minHHMM: string | null = null;
 
-  // ---- Helper: borne horaire minimale pour une date donnée
-  // renvoie "HH:MM" ou null si aucune contrainte (autre que minDate côté date)
-  const minHHMMForDate = (d: string): string | null => {
-    let base: string | null = null;
-
-    // Si aujourd'hui: >= maintenant
-    if (d === todayISO) base = `${nowHH}:${nowMM}`;
-
-    // Si même jour que la dernière PROGRAMMÉE: strictement après
-    if (lastScheduledKey && d === lastScheduledKey.slice(0, 10)) {
-      const [lh, lm] = lastScheduledKey.slice(11, 16).split(":");
-      // +1 minute strict
-      const dateRef = new Date(2000, 0, 1, Number(lh), Number(lm), 0);
-      dateRef.setMinutes(dateRef.getMinutes() + 1);
-      const plusH = pad2(dateRef.getHours());
-      const plusM = pad2(dateRef.getMinutes());
-      const plus = `${plusH}:${plusM}`;
-      base = base ? (plus > base ? plus : base) : plus;
+    // 1) Si aujourd’hui (Tunis) : ≥ maintenant (Tunis)
+    if (dateSeance === tunisNow.todayISO) {
+      minHHMM = `${tunisNow.hh}:${tunisNow.mi}`;
     }
 
-    return base;
+    // 2) Si même jour que la DERNIÈRE PROGRAMMÉE : strictement après (donc +1 minute)
+    if (lastScheduledKey && dateSeance === lastScheduledKey.slice(0, 10)) {
+      const lastHHMM = lastScheduledKey.slice(11, 16);
+      const plus1 = addMinutesToHHMM(lastHHMM, 1);
+      minHHMM = minHHMM ? (plus1 > minHHMM ? plus1 : minHHMM) : plus1;
+    }
+
+    return minHHMM;
   };
 
-  // ---- AUTO-CLAMP heure/minute quand la date change ou quand les bornes changent
+  // Clamp quand la date change / quand une borne change
   useEffect(() => {
-    // clamp date (sécurité minDateISO)
-    setDateSeance((prev) => (prev < minDateISO ? minDateISO : prev));
-  }, [minDateISO]);
-
-  useEffect(() => {
-    const minHHMM = minHHMMForDate(dateSeance);
+    const minHHMM = getMinHHMMForCurrentDate();
     if (!minHHMM) return;
 
-    const [minH, minM] = minHHMM.split(":");
     const curKey = keyFrom(dateSeance, hour, minute === "" ? "00" : minute.padStart(2, "0"));
-    const minKey = keyFrom(dateSeance, minH, minM);
-
-    if (curKey < minKey) {
-      // auto-élève à la borne
-      if (hour !== minH) setHour(minH);
-      if (minute.padStart(2, "0") !== minM) setMinute(minM);
+    const minKey = keyFrom(dateSeance, minHHMM.slice(0, 2), minHHMM.slice(3, 5));
+    if (parseKey(curKey) < parseKey(minKey)) {
+      setHour(minHHMM.slice(0, 2));
+      setMinute(minHHMM.slice(3, 5));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateSeance, lastScheduledKey, todayISO, nowHH, nowMM]);
+  }, [dateSeance, lastScheduledKey, tunisNow.todayISO, tunisNow.hh, tunisNow.mi]);
 
-  // ---- Rappel UX: si on tape des minutes < min quand HH = minH, re-clamp au fil de l'eau
-  useEffect(() => {
-    const minHHMM = minHHMMForDate(dateSeance);
-    if (!minHHMM) return;
-    const [minH, minM] = minHHMM.split(":");
-
-    if (hour < minH) {
-      setHour(minH);
-      setMinute(minM);
+  // Inputs sanitation + clamp dynamique
+  const onMinuteChange = (v: string) => {
+    const clean = v.replace(/[^\d]/g, "").slice(0, 2);
+    const minHHMM = getMinHHMMForCurrentDate();
+    if (minHHMM && hour === minHHMM.slice(0, 2)) {
+      const minM = parseInt(minHHMM.slice(3, 5), 10);
+      const typed = parseInt(clean || "0", 10);
+      const clamped = Math.max(isNaN(typed) ? 0 : typed, minM);
+      setMinute(pad2(clamped));
       return;
     }
-    if (hour === minH) {
-      const mm = (minute || "00").padStart(2, "0");
-      if (mm < minM) setMinute(minM);
+    setMinute(clean);
+  };
+
+  const onHourChange = (v: string) => {
+    const minHHMM = getMinHHMMForCurrentDate();
+    if (!minHHMM) {
+      setHour(v);
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hour, minute, dateSeance, lastScheduledKey]);
+    const minH = parseInt(minHHMM.slice(0, 2), 10);
+    const nextH = parseInt(v, 10);
+    if (nextH < minH) {
+      // impossible via select (option disable), sécurité
+      setHour(minHHMM.slice(0, 2));
+      setMinute(minHHMM.slice(3, 5));
+      return;
+    }
+    // si égal, clamp MM
+    if (nextH === minH) {
+      const minM = parseInt(minHHMM.slice(3, 5), 10);
+      const curM = parseInt((minute || "0").padStart(2, "0"), 10);
+      setHour(v);
+      if (curM < minM) setMinute(pad2(minM));
+      return;
+    }
+    setHour(v);
+  };
+
+  // “Désactivation” des options heures < min quand borne existe
+  const minHHMMForSelect = getMinHHMMForCurrentDate();
+  const minHourForSelect = minHHMMForSelect ? parseInt(minHHMMForSelect.slice(0, 2), 10) : null;
+
+  // Inputs sanitation
+  const onDureeChange = (v: string) => setDuree(v.replace(/[^\d]/g, "").slice(0, 4));
 
   const getNextSeanceNumber = async (dossierId: string) => {
     const { data, error } = await supabase
@@ -288,16 +331,16 @@ export default function ScheduleSeanceModal({
       return;
     }
 
-    // Aujourd’hui: horaire ≥ maintenant (déjà auto-clampé, mais on garde la garde-fou)
-    if (dateSeance === todayISO) {
+    // Aujourd’hui (Tunis) : horaire ≥ maintenant
+    if (dateSeance === tunisNow.todayISO) {
       const chosenKey = keyFrom(dateSeance, hour, mm);
-      if (!(chosenKey >= nowKey)) {
-        setSubmitError(`Pour aujourd’hui, l’horaire doit être ≥ ${nowHH}:${nowMM}.`);
+      if (!(chosenKey >= tunisNow.nowKey)) {
+        setSubmitError(`Pour aujourd’hui, l’horaire doit être ≥ ${tunisNow.hh}:${tunisNow.mi}.`);
         return;
       }
     }
 
-    // Même jour que la DERNIÈRE PROGRAMMÉE: strictement après (déjà auto-clampé)
+    // Même jour que la DERNIÈRE PROGRAMMÉE : strictement après
     if (lastScheduledKey && dateSeance === lastScheduledKey.slice(0, 10)) {
       const chosenKey = keyFrom(dateSeance, hour, mm);
       if (!(chosenKey > lastScheduledKey)) {
@@ -319,7 +362,7 @@ export default function ScheduleSeanceModal({
     setSaving(true);
     try {
       const numero = await getNextSeanceNumber(selectedDossier.id);
-      const heure = `${hour}:${mm}:00`;
+      const heure = `${pad2(hour)}:${pad2(mm)}:00`;
 
       const payload: any = {
         dossier_id: selectedDossier.id,
@@ -355,7 +398,7 @@ export default function ScheduleSeanceModal({
           </button>
         </div>
 
-        {/* Recherche patient */}
+        {/* Patient */}
         <div>
           <label className="block text-sm text-gray-700 mb-1">Patient</label>
           <div className="relative">
@@ -396,7 +439,7 @@ export default function ScheduleSeanceModal({
                       className="w-full px-3 py-2 text-left hover:bg-gray-50 text-sm"
                     >
                       {p.prenom} {p.nom}{" "}
-                      {p.telephone ? <span className="text-gray-400">— {p.telephone}</span> : null}
+                      {(p as any).telephone ? <span className="text-gray-400">— {(p as any).telephone}</span> : null}
                     </button>
                   ))
                 )}
@@ -455,15 +498,19 @@ export default function ScheduleSeanceModal({
             <div className="flex items-center gap-2">
               <select
                 value={hour}
-                onChange={(e) => setHour(e.target.value)}
+                onChange={(e) => onHourChange(e.target.value)}
                 className="w-20 border rounded px-2 py-2 bg-white"
                 title="Heure"
               >
-                {hoursOptions.map((h) => (
-                  <option key={h} value={h}>
-                    {h}
-                  </option>
-                ))}
+                {hoursOptions.map((h) => {
+                  const disabled =
+                    minHourForSelect !== null && parseInt(h, 10) < minHourForSelect;
+                  return (
+                    <option key={h} value={h} disabled={disabled}>
+                      {h}
+                    </option>
+                  );
+                })}
               </select>
               <span className="text-gray-500">:</span>
               <input
@@ -477,18 +524,18 @@ export default function ScheduleSeanceModal({
               />
               <Clock className="w-4 h-4 text-gray-400" />
             </div>
-            {/* Indices bornes */}
-            {dateSeance === todayISO && (
-              <p className="text-xs text-gray-500 mt-1">
-                Pour aujourd’hui, l’horaire doit être ≥ {nowHH}:{nowMM}.
-              </p>
-            )}
-            {lastScheduledKey && dateSeance === lastScheduledKey.slice(0, 10) && (
-              <p className="text-xs text-gray-500 mt-1">
-                Le créneau doit être <b>strictement</b> après{" "}
-                {lastScheduledKey.replace("T", " ").slice(0, 16)}.
-              </p>
-            )}
+
+            {/* Indices borne “maintenant” et “dernière programmée” */}
+            <div className="text-xs text-gray-500 mt-1 space-y-0.5">
+              {dateSeance === tunisNow.todayISO && (
+                <div>Pour aujourd’hui, l’horaire doit être ≥ {tunisNow.hh}:{tunisNow.mi}.</div>
+              )}
+              {lastScheduledKey && dateSeance === lastScheduledKey.slice(0, 10) && (
+                <div>
+                  Doit être &gt; {lastScheduledKey.replace("T", " ").slice(0, 16)} (dernière programmée).
+                </div>
+              )}
+            </div>
           </div>
 
           <div>
@@ -550,6 +597,331 @@ export default function ScheduleSeanceModal({
             className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded disabled:opacity-50"
           >
             {saving ? "Enregistrement…" : "Programmer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =================================================================
+   ÉDITION d’une séance programmée — borne “≥ maintenant” en Africa/Tunis
+================================================================= */
+export function EditScheduledSeanceModal({
+  seance,
+  onClose,
+  onSuccess,
+}: {
+  seance: any;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const { userBase } = useAuth();
+  const isAdmin = userBase?.type_utilisateur === "admin";
+
+  const [dateSeance, setDateSeance] = useState<string>(seance?.date_seance || "");
+  const [minDateISO, setMinDateISO] = useState<string>(getTunisNow().todayISO);
+  const [hour, setHour] = useState<string>(
+    seance?.heure_seance ? String(seance.heure_seance).slice(0, 2) : "08"
+  );
+  const [minute, setMinute] = useState<string>(
+    seance?.heure_seance ? String(seance.heure_seance).slice(3, 5) : "00"
+  );
+  const [duree, setDuree] = useState<string>(
+    seance?.duree_minutes != null ? String(seance.duree_minutes) : ""
+  );
+  const [note, setNote] = useState<string>(seance?.note || "");
+  const [prestataireId, setPrestataireId] = useState<string>(seance?.prestataire_id || "");
+
+  const [prestataires, setPrestataires] = useState<UserBase[]>([]);
+  const [prevKey, setPrevKey] = useState<string | null>(null);
+  const [nextKey, setNextKey] = useState<string | null>(null);
+
+  const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+
+  const hoursOptions = Array.from({ length: 13 }, (_, i) => pad2(8 + i)); // 08..20
+
+  // Prestataires (admin)
+  useEffect(() => {
+    (async () => {
+      if (isAdmin) {
+        const { data } = await supabase
+          .from("users_base")
+          .select("id, nom, prenom")
+          .eq("client_id", userBase?.client_id)
+          .order("nom");
+        setPrestataires((data || []) as UserBase[]);
+      }
+    })();
+  }, [isAdmin, userBase?.client_id]);
+
+  // minDate = max(aujourd’hui-Tunis, dernière séance réalisée)
+  useEffect(() => {
+    (async () => {
+      const baseToday = getTunisNow().todayISO;
+      if (!seance?.dossier_id) {
+        setMinDateISO(baseToday);
+        setDateSeance((p) => (p < baseToday ? baseToday : p));
+        return;
+      }
+      const { data } = await supabase
+        .from("seances")
+        .select("date_seance")
+        .eq("dossier_id", seance.dossier_id)
+        .in("etat_seance", ["réalisée", "realisee"])
+        .order("date_seance", { ascending: false })
+        .limit(1);
+
+      if (!data || data.length === 0) {
+        setMinDateISO(baseToday);
+        setDateSeance((p) => (p < baseToday ? baseToday : p));
+        return;
+      }
+      const lastReal = String(data[0].date_seance);
+      const min = lastReal > baseToday ? lastReal : baseToday;
+      setMinDateISO(min);
+      setDateSeance((p) => (p < min ? min : p));
+    })();
+  }, [seance?.dossier_id]);
+
+  // voisines programmées
+  useEffect(() => {
+    (async () => {
+      if (!seance?.dossier_id || !seance?.numero_seance) {
+        setPrevKey(null);
+        setNextKey(null);
+        return;
+      }
+      const num = Number(seance.numero_seance);
+      const { data } = await supabase
+        .from("seances")
+        .select("numero_seance, date_seance, heure_seance, etat_seance")
+        .eq("dossier_id", seance.dossier_id)
+        .in("etat_seance", ["programmée", "programmee"])
+        .order("numero_seance", { ascending: true });
+
+      const all = (data || []) as any[];
+      const prev = all.find((s) => s.numero_seance === num - 1);
+      const next = all.find((s) => s.numero_seance === num + 1);
+
+      const prevKeyLocal = prev
+        ? keyFrom(
+            String(prev.date_seance).slice(0, 10),
+            String(prev.heure_seance ?? "00:00").slice(0, 2),
+            String(prev.heure_seance ?? "00:00").slice(3, 5)
+          )
+        : null;
+      const nextKeyLocal = next
+        ? keyFrom(
+            String(next.date_seance).slice(0, 10),
+            String(next.heure_seance ?? "00:00").slice(0, 2),
+            String(next.heure_seance ?? "00:00").slice(3, 5)
+          )
+        : null;
+
+      setPrevKey(prevKeyLocal);
+      setNextKey(nextKeyLocal);
+    })();
+  }, [seance?.dossier_id, seance?.numero_seance]);
+
+  const onMinuteChange = (v: string) => setMinute(v.replace(/[^\d]/g, "").slice(0, 2));
+  const onDureeChange = (v: string) => setDuree(v.replace(/[^\d]/g, "").slice(0, 4));
+
+  const handleUpdate = async () => {
+    setSubmitError("");
+    if (!seance?.id) return;
+
+    if (dateSeance < minDateISO) {
+      setSubmitError("Date invalide (antérieure aux autorisations).");
+      return;
+    }
+    if (!/^\d{2}$/.test(hour)) {
+      setSubmitError("Heure invalide.");
+      return;
+    }
+    const mm = minute === "" ? "00" : minute.padStart(2, "0");
+    const mmNum = Number(mm);
+    if (isNaN(mmNum) || mmNum < 0 || mmNum > 59) {
+      setSubmitError("Minutes invalides (0–59).");
+      return;
+    }
+    const dureeNum = duree === "" ? null : Number(duree);
+    if (dureeNum !== null && (isNaN(dureeNum) || dureeNum < 0)) {
+      setSubmitError("Durée invalide (minutes ≥ 0).");
+      return;
+    }
+
+    // Aujourd’hui (Tunis) : ≥ maintenant
+    const tn = getTunisNow();
+    const chosenKey = keyFrom(dateSeance, hour, mm);
+    if (dateSeance === tn.todayISO && parseKey(chosenKey) < parseKey(tn.nowKey)) {
+      setSubmitError("Pour aujourd’hui, l’horaire doit être ≥ maintenant.");
+      return;
+    }
+
+    // Bornes voisines
+    if (prevKey && !(parseKey(chosenKey) > parseKey(prevKey))) {
+      setSubmitError(
+        `Doit être strictement après la séance précédente (${prevKey.replace("T", " ").slice(0, 16)}).`
+      );
+      return;
+    }
+    if (nextKey && !(parseKey(chosenKey) < parseKey(nextKey))) {
+      setSubmitError(
+        `Doit être strictement avant la séance suivante (${nextKey.replace("T", " ").slice(0, 16)}).`
+      );
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload: any = {
+        date_seance: dateSeance,
+        heure_seance: `${pad2(hour)}:${pad2(mm)}:00`,
+        duree_minutes: dureeNum,
+        note: note || null,
+        prestataire_id: prestataireId || null,
+      };
+      const { error } = await supabase.from("seances").update(payload).eq("id", seance.id);
+      if (error) throw error;
+      onSuccess();
+    } catch (e: any) {
+      console.error("Erreur mise à jour de la séance programmée:", e);
+      setSubmitError(e?.message || "Impossible d'enregistrer les modifications.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl w-full max-w-xl p-6 space-y-5">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Modifier la séance programmée</h3>
+          <button onClick={onClose} className="p-2 rounded hover:bg-gray-100" title="Fermer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Date + Heure + Durée */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Date *</label>
+            <input
+              type="date"
+              value={dateSeance}
+              onChange={(e) => setDateSeance(e.target.value)}
+              min={minDateISO}
+              className="w-full border rounded px-3 py-2"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Jour autorisé ≥ {new Date(minDateISO).toLocaleDateString("fr-FR")}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Heure *</label>
+            <div className="flex items-center gap-2">
+              <select
+                value={hour}
+                onChange={(e) => setHour(e.target.value)}
+                className="w-20 border rounded px-2 py-2 bg-white"
+                title="Heure"
+              >
+                {hoursOptions.map((h) => (
+                  <option key={h} value={h}>
+                    {h}
+                  </option>
+                ))}
+              </select>
+              <span className="text-gray-500">:</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={minute}
+                onChange={(e) => onMinuteChange(e.target.value)}
+                placeholder="MM"
+                className="w-20 border rounded px-2 py-2"
+                title="Minutes (0–59)"
+              />
+              <Clock className="w-4 h-4 text-gray-400" />
+            </div>
+
+            {/* Aides voisines */}
+            <div className="text-xs space-y-0.5 mt-1">
+              {prevKey && (
+                <div className="text-gray-600">
+                  &gt; {prevKey.replace("T", " ").slice(0, 16)} (programmée précédente)
+                </div>
+              )}
+              {nextKey && (
+                <div className="text-gray-600">
+                  &lt; {nextKey.replace("T", " ").slice(0, 16)} (programmée suivante)
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Durée (min)</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={duree}
+              onChange={(e) => onDureeChange(e.target.value)}
+              placeholder="ex: 45"
+              className="w-full border rounded px-3 py-2"
+            />
+          </div>
+        </div>
+
+        {/* Prestataire (admin) */}
+        {isAdmin && (
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Prestataire *</label>
+            <select
+              value={prestataireId || ""}
+              onChange={(e) => setPrestataireId(e.target.value)}
+              className="w-full border rounded px-3 py-2 bg-white"
+            >
+              {prestataires.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.prenom} {u.nom}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Note */}
+        <div>
+          <label className="block text-sm text-gray-700 mb-1">Note</label>
+          <textarea
+            rows={3}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Ajouter une note (optionnel)…"
+            className="w-full border rounded px-3 py-2"
+          />
+        </div>
+
+        {submitError && (
+          <div className="text-sm bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2">
+            {submitError}
+          </div>
+        )}
+
+        <div className="flex flex-col-reverse sm:flex-row justify-between gap-2">
+          <button onClick={onClose} className="px-4 py-2 border rounded">
+            Annuler
+          </button>
+          <button
+            onClick={handleUpdate}
+            disabled={saving}
+            className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded disabled:opacity-50"
+          >
+            {saving ? "Enregistrement…" : "Enregistrer"}
           </button>
         </div>
       </div>
